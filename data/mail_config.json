@@ -1,0 +1,7 @@
+{
+  "host": "smtp.gmail.com",
+  "port": 587,
+  "tls": true,
+  "sender": "xogh7881@gmail.com",
+  "recipients": "taehokim@harimpetfood.com"
+}
