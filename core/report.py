@@ -119,18 +119,26 @@ def build_report_html(m1, m2, sel_products=None, sel_materials=None, app_url="")
         if mm not in gp.columns:
             gp[mm] = 0
     t1s, t2s = gp[m1].sum(), gp[m2].sum()
+    tot_growth = (t2s / t1s - 1) * 100 if t1s else 0
     grows = []
     for g in order:
         a = gp.loc[g, m1] / t1s * 100 if t1s else 0
         b = gp.loc[g, m2] / t2s * 100 if t2s else 0
+        dv = gp.loc[g, m2] - gp.loc[g, m1]
+        rate = ("신규" if gp.loc[g, m1] == 0 else
+                f'<span style="color:{_color(dv)};">{(gp.loc[g, m2]/gp.loc[g, m1]-1)*100:+.1f}%</span>')
         grows.append([g, f"{gp.loc[g, m1]/1000:,.1f}", f"{gp.loc[g, m2]/1000:,.1f}",
+                      f'<span style="color:{_color(dv)};">{dv/1000:+,.1f}</span>', rate,
                       f"{a:.1f}%", f"{b:.1f}%",
-                      f'<span style="color:{_color(b-a)};">{b-a:+.1f}</span>'])
+                      f'<span style="color:{GRAY};">{b-a:+.1f}</span>'])
     grows.append([f"<b>합계</b>", f"<b>{t1s/1000:,.1f}</b>", f"<b>{t2s/1000:,.1f}</b>",
+                  f"<b>{(t2s-t1s)/1000:+,.1f}</b>", f"<b>{tot_growth:+.1f}%</b>",
                   "100%", "100%", ""])
-    grp = _table(["그룹", f"{m1}(톤)", f"{m2}(톤)", f"{m1} 비중", f"{m2} 비중", "비중차(pp)"],
-                 grows, ["left", "right", "right", "right", "right", "right"])
-    grp += _note("비중차(pp) = 당월 비중 − 전월 비중. +면 그 그룹으로 생산이 쏠린 것 → 사용단가·원료 구성 변화의 배경.")
+    grp = _table(["그룹", f"{m1}(톤)", f"{m2}(톤)", "증감(톤)", "증감률",
+                  f"{m1} 비중", f"{m2} 비중", "비중차(pp)"],
+                 grows, ["left", "right", "right", "right", "right", "right", "right", "right"])
+    grp += _note(f"실제 증감은 ‘증감(톤)·증감률’ 기준. 비중차(pp)는 감소가 아니라 "
+                 f"<b>전체 성장률({tot_growth:+.1f}%)보다 느리면 −, 빠르면 +</b> — 생산 쏠림 지표입니다.")
 
     # ---------- 생산 TOP10 변화율 ----------
     w = pw.pivot_table(index="표준제품", columns="년월", values="계획중량",

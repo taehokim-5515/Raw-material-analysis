@@ -99,21 +99,26 @@ gp = pw[pw["년월"].isin([m1, m2])].pivot_table(index="그룹", columns="년월
      values="계획중량", aggfunc="sum", fill_value=0).reindex(order).fillna(0)
 for mm in (m1, m2):
     if mm not in gp.columns: gp[mm] = 0
-ga, gb = st.columns([2, 3])
+ga, gb = st.columns([3, 2])
 with ga:
     st.markdown("**그룹별 톤수·비중**")
     t1, t2 = gp[m1].sum(), gp[m2].sum()
+    tot_growth = (t2 / t1 - 1) * 100 if t1 else 0
     w1p = [gp.loc[g, m1] / t1 * 100 if t1 else 0 for g in order]
     w2p = [gp.loc[g, m2] / t2 * 100 if t2 else 0 for g in order]
     show = pd.DataFrame({"그룹": order})
     show[f"{m1}(톤)"] = [f"{gp.loc[g, m1]/1000:,.1f}" for g in order]
     show[f"{m2}(톤)"] = [f"{gp.loc[g, m2]/1000:,.1f}" for g in order]
+    show["증감(톤)"] = [f"{(gp.loc[g, m2]-gp.loc[g, m1])/1000:+,.1f}" for g in order]
+    show["증감률"] = ["신규" if gp.loc[g, m1] == 0 else
+                   f"{(gp.loc[g, m2]/gp.loc[g, m1]-1)*100:+.1f}%" for g in order]
     show[f"{m1} 비중"] = [f"{v:.1f}%" for v in w1p]
     show[f"{m2} 비중"] = [f"{v:.1f}%" for v in w2p]
     show["비중차(pp)"] = [f"{b-a:+.1f}" for a, b in zip(w1p, w2p)]
     st.dataframe(show, width='stretch', hide_index=True)
-    st.caption(f"총 생산: {m1} {t1/1000:,.1f}톤 → {m2} {t2/1000:,.1f}톤. "
-               "비중차(pp)=당월−전월 비중. +면 그 그룹으로 생산이 쏠린 것.")
+    st.caption(f"총 생산: {m1} {t1/1000:,.1f}톤 → {m2} {t2/1000:,.1f}톤 (**{tot_growth:+.1f}%**). "
+               f"실제 증감은 ‘증감(톤)·증감률’ 기준. **비중차(pp)는 감소가 아니라 "
+               f"전체 성장률({tot_growth:+.1f}%)보다 느리면 −, 빠르면 +** — 생산 쏠림 지표입니다.")
 with gb:
     fig4 = go.Figure()
     fig4.add_bar(name=m1, x=order, y=[gp.loc[g, m1]/1000 for g in order], marker_color="#B5D4F4")
