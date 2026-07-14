@@ -11,6 +11,7 @@ st.title("📊 원료비 원인분석 — 월 비교 (실적)")
 D = load_all()
 m1, m2 = month_pickers(D["months"], key="home")
 cost, plan = D["cost"], D["plan"]
+LIMITED = st.session_state.get("role") == "material"  # cham: 요약 3개 섹션만
 
 det = dc.actual_material_detail(m1, m2, D["name_map"], D["bom_codes"])  # 실적·전사
 tot1, tot2 = det["전월금액"].sum(), det["당월금액"].sum()
@@ -18,52 +19,53 @@ u1, u2 = det["전월사용kg"].sum(), det["당월사용kg"].sum()
 price_imp = det["단가영향"].sum()
 vol_imp = det["사용량영향"].sum()
 
-# ---- KPI ----
-c = st.columns(4)
-c[0].metric(f"{m1} 실적 원료비", won(tot1) + "원")
-c[1].metric(f"{m2} 실적 원료비", won(tot2) + "원", f"{(tot2/tot1-1)*100:+.1f}%")
-c[2].metric("총 증감", signed_won(tot2 - tot1) + "원")
-c[3].metric("원료 사용량", f"{u2/1000:,.0f}톤", f"{(u2/u1-1)*100:+.1f}%")
-st.caption("설비에서 실제 소비된 사용량·금액(DB) 기준입니다. 총액이 ERP 실제 지출과 같습니다.")
+if not LIMITED:
+    # ---- KPI ----
+    c = st.columns(4)
+    c[0].metric(f"{m1} 실적 원료비", won(tot1) + "원")
+    c[1].metric(f"{m2} 실적 원료비", won(tot2) + "원", f"{(tot2/tot1-1)*100:+.1f}%")
+    c[2].metric("총 증감", signed_won(tot2 - tot1) + "원")
+    c[3].metric("원료 사용량", f"{u2/1000:,.0f}톤", f"{(u2/u1-1)*100:+.1f}%")
+    st.caption("설비에서 실제 소비된 사용량·금액(DB) 기준입니다. 총액이 ERP 실제 지출과 같습니다.")
 
-# ---- 워터폴 (실적 2분할) ----
-st.subheader("원료비 증감 분해 (워터폴)")
-steps = [("단가영향", price_imp), ("사용량영향", vol_imp)]
-fig = go.Figure(go.Waterfall(
-    orientation="v", measure=["absolute"] + ["relative"] * len(steps) + ["total"],
-    x=[f"{m1}"] + [s[0] for s in steps] + [f"{m2}"],
-    y=[tot1] + [s[1] for s in steps] + [tot2],
-    text=[won(tot1)] + [signed_won(s[1]) for s in steps] + [won(tot2)],
-    textposition="outside", connector={"line": {"color": "#B4B2A9"}},
-    decreasing={"marker": {"color": "#378ADD"}}, increasing={"marker": {"color": "#D85A30"}},
-    totals={"marker": {"color": "#888780"}}))
-fig.update_layout(height=420, margin=dict(t=30, b=10), showlegend=False, xaxis=dict(type="category"))
-st.plotly_chart(fig, width='stretch')
-st.caption("단가영향 = Σ(단가변동 × 당월사용량) · 사용량영향 = Σ(사용량변동 × 전월단가). "
-           "두 막대의 합 = 총 증감(실적, 교호 없는 2분할). 제품 구성까지 보려면 ‘사용단가 분석’ 페이지.")
+    # ---- 워터폴 (실적 2분할) ----
+    st.subheader("원료비 증감 분해 (워터폴)")
+    steps = [("단가영향", price_imp), ("사용량영향", vol_imp)]
+    fig = go.Figure(go.Waterfall(
+        orientation="v", measure=["absolute"] + ["relative"] * len(steps) + ["total"],
+        x=[f"{m1}"] + [s[0] for s in steps] + [f"{m2}"],
+        y=[tot1] + [s[1] for s in steps] + [tot2],
+        text=[won(tot1)] + [signed_won(s[1]) for s in steps] + [won(tot2)],
+        textposition="outside", connector={"line": {"color": "#B4B2A9"}},
+        decreasing={"marker": {"color": "#378ADD"}}, increasing={"marker": {"color": "#D85A30"}},
+        totals={"marker": {"color": "#888780"}}))
+    fig.update_layout(height=420, margin=dict(t=30, b=10), showlegend=False, xaxis=dict(type="category"))
+    st.plotly_chart(fig, width='stretch')
+    st.caption("단가영향 = Σ(단가변동 × 당월사용량) · 사용량영향 = Σ(사용량변동 × 전월단가). "
+               "두 막대의 합 = 총 증감(실적, 교호 없는 2분할). 제품 구성까지 보려면 ‘사용단가 분석’ 페이지.")
 
-# ---- 드릴다운 ----
-st.markdown("##### 🔎 어느 항목이 궁금한가요? — 항목을 고르면 원료별 기여를 보여드립니다")
-pick = st.radio("분해 항목", ["단가영향", "사용량영향"], horizontal=True, label_visibility="collapsed")
+    # ---- 드릴다운 ----
+    st.markdown("##### 🔎 어느 항목이 궁금한가요? — 항목을 고르면 원료별 기여를 보여드립니다")
+    pick = st.radio("분해 항목", ["단가영향", "사용량영향"], horizontal=True, label_visibility="collapsed")
 
-def _hbar(df, xcol, n=14):
-    d = df.reindex(df[xcol].abs().sort_values(ascending=False).index).head(n)
-    f = go.Figure(go.Bar(x=d[xcol], y=d["원료명"], orientation="h",
-        marker_color=["#D85A30" if v >= 0 else "#378ADD" for v in d[xcol]],
-        text=[signed_won(v) + "원" for v in d[xcol]], textposition="auto"))
-    f.update_layout(height=440, margin=dict(t=10, b=10), yaxis=dict(autorange="reversed"))
-    st.plotly_chart(f, width='stretch')
+    def _hbar(df, xcol, n=14):
+        d = df.reindex(df[xcol].abs().sort_values(ascending=False).index).head(n)
+        f = go.Figure(go.Bar(x=d[xcol], y=d["원료명"], orientation="h",
+            marker_color=["#D85A30" if v >= 0 else "#378ADD" for v in d[xcol]],
+            text=[signed_won(v) + "원" for v in d[xcol]], textposition="auto"))
+        f.update_layout(height=440, margin=dict(t=10, b=10), yaxis=dict(autorange="reversed"))
+        st.plotly_chart(f, width='stretch')
 
-if pick == "단가영향":
-    st.info(f"**단가영향 {signed_won(price_imp)}원** — 단가만 바뀌었을 때의 영향. "
-            "각 원료의 (단가변동 × 당월 실적사용량) 합.")
-    _hbar(det, "단가영향")
-else:
-    st.info(f"**사용량영향 {signed_won(vol_imp)}원** — 사용량이 바뀌어서 생긴 영향. "
-            "각 원료의 (사용량변동 × 전월단가) 합. 많이 만든 달일수록 큽니다.")
-    _hbar(det, "사용량영향")
+    if pick == "단가영향":
+        st.info(f"**단가영향 {signed_won(price_imp)}원** — 단가만 바뀌었을 때의 영향. "
+                "각 원료의 (단가변동 × 당월 실적사용량) 합.")
+        _hbar(det, "단가영향")
+    else:
+        st.info(f"**사용량영향 {signed_won(vol_imp)}원** — 사용량이 바뀌어서 생긴 영향. "
+                "각 원료의 (사용량변동 × 전월단가) 합. 많이 만든 달일수록 큽니다.")
+        _hbar(det, "사용량영향")
 
-st.divider()
+    st.divider()
 
 # ---- 제품별(이론) / 원료별(실적) 원료비 증감 ----
 left, right = st.columns(2)
@@ -141,17 +143,17 @@ with st.expander("제품 단위 계획중량 TOP 보기"):
                        legend=dict(orientation="h", y=1.1))
     st.plotly_chart(fig5, width='stretch')
 
-st.divider()
-
-# ---- BOM 이론 vs 실적 대사 ----
-st.subheader("BOM 이론 vs 실적 대사 (수율·로스)")
-yg = dc.yield_gap(cost, m1, m2)
-show = yg.copy()
-for cc in ["이론사용kg", "실적사용kg"]:
-    show[cc] = show[cc].map(lambda v: f"{v:,.0f}kg")
-for cc in ["이론금액", "실적금액"]:
-    show[cc] = show[cc].map(lambda v: won(v) + "원")
-for cc in ["사용량gap%", "금액gap%"]:
-    show[cc] = show[cc].map(lambda v: f"{v:+.2f}%")
-st.dataframe(show, width='stretch', hide_index=True)
-st.caption("이 페이지(실적) 총액엔 BOM 없는 라인(퀴진·트릿·밀·반제품)도 포함됩니다. 상세는 ‘원료상세 실적’ 페이지.")
+if not LIMITED:
+    st.divider()
+    # ---- BOM 이론 vs 실적 대사 ----
+    st.subheader("BOM 이론 vs 실적 대사 (수율·로스)")
+    yg = dc.yield_gap(cost, m1, m2)
+    show = yg.copy()
+    for cc in ["이론사용kg", "실적사용kg"]:
+        show[cc] = show[cc].map(lambda v: f"{v:,.0f}kg")
+    for cc in ["이론금액", "실적금액"]:
+        show[cc] = show[cc].map(lambda v: won(v) + "원")
+    for cc in ["사용량gap%", "금액gap%"]:
+        show[cc] = show[cc].map(lambda v: f"{v:+.2f}%")
+    st.dataframe(show, width='stretch', hide_index=True)
+    st.caption("이 페이지(실적) 총액엔 BOM 없는 라인(퀴진·트릿·밀·반제품)도 포함됩니다. 상세는 ‘원료상세 실적’ 페이지.")
