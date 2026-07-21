@@ -175,6 +175,38 @@ def parse_price_multi(file):
     return months, report
 
 
+def parse_forecast_multi(file):
+    """예상단가 파일(년월·원료코드·단가, 여러 달) → 월별 분리.
+    반환: (months_dict{ym: DataFrame[원료코드,원료명,단가]}, report)"""
+    df = pd.read_excel(file)
+    df.columns = [str(c) for c in df.columns]
+    def pick(cands):
+        for c in df.columns:
+            if any(k in c for k in cands):
+                return c
+        return None
+    cym = pick(["년월", "월", "기간"])
+    ccode = pick(["코드"]); cname = pick(["원료명", "품목명", "명"])
+    cprice = pick(["단가"])
+    if cym is None or ccode is None or cprice is None:
+        raise ValueError("필수 컬럼(년월/원료코드/단가)을 찾지 못했습니다.")
+    work = pd.DataFrame({
+        "년월": df[cym].map(_norm_ym),
+        "원료코드": df[ccode].astype(str).str.replace(r"\.0$", "", regex=True).str.strip(),
+        "원료명": df[cname] if cname else "",
+        "단가": pd.to_numeric(df[cprice], errors="coerce"),
+    })
+    bad = int(work["년월"].isna().sum())
+    work = work.dropna(subset=["년월"])
+    work = work[~work["원료코드"].isin(["", "nan", "None"])]
+    work["단가"] = work["단가"].fillna(0)
+    months, per = {}, {}
+    for ym, g in work.groupby("년월"):
+        months[ym] = g.drop(columns=["년월"]).reset_index(drop=True)
+        per[ym] = {"코드수": g["원료코드"].nunique(), "단가0": int((g["단가"] == 0).sum())}
+    return months, {"월별": per, "무효행": bad}
+
+
 def validate_month(ym, plan_rows):
     """월 마감 검증 게이트. 통과 여부 + 이슈 리스트."""
     issues = []

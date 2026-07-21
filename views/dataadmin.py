@@ -7,8 +7,35 @@ from core import db, ingest, templates
 st.title("🗂️ 데이터 관리 — 월 마감")
 st.caption("① 관리자 계획중량(작업일자로 월 자동분리) → ② 원료 단가·사용량(년월로 월 자동분리) → 분석")
 
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["① 관리자 계획중량", "② 단가·사용량", "③ 업로드 양식", "DB 미리보기"])
+tab1, tab2, tab_f, tab3, tab4 = st.tabs(
+    ["① 관리자 계획중량", "② 단가·사용량", "③ 예상단가", "④ 업로드 양식", "DB 미리보기"])
+
+with tab_f:
+    st.markdown("**예상단가**(년월·원료코드·단가) 파일을 올리면 `년월`으로 자동 분리합니다. "
+                "미래 월 단가를 넣으면 **제품 드릴다운 → 단위원가 월별 전망**에 반영됩니다. "
+                "같은 년월은 덮어씁니다.")
+    upf = st.file_uploader("예상단가 파일 (여러 달 통합)", type=["xls", "xlsx"], key="fc_up")
+    if upf:
+        try:
+            fmonths, frep = ingest.parse_forecast_multi(upf)
+        except ValueError as e:
+            st.error(str(e)); st.stop()
+        summf = pd.DataFrame([
+            {"년월": ym, "원료 코드수": frep["월별"][ym]["코드수"],
+             "단가 0원": frep["월별"][ym]["단가0"]} for ym in sorted(fmonths)])
+        c = st.columns(3)
+        c[0].metric("분리된 월수", f"{len(fmonths)}개월")
+        c[1].metric("무효 행", frep["무효행"])
+        c[2].metric("단가 0원 총", int(summf["단가 0원"].sum()))
+        st.dataframe(summf, width='stretch', hide_index=True)
+        if st.button("전체 월 예상단가 DB 반영", type="primary", key="fc_apply"):
+            db.upsert_forecast_multi(fmonths); st.cache_data.clear()
+            st.success(f"{len(fmonths)}개월 반영 완료: {', '.join(sorted(fmonths))}")
+    cur = db.load_forecast()
+    if len(cur):
+        st.caption(f"현재 예상단가 DB: {cur['년월'].nunique()}개월 "
+                   f"({sorted(cur['년월'].astype(str).unique())[0]} ~ "
+                   f"{sorted(cur['년월'].astype(str).unique())[-1]}) · {len(cur):,}행")
 
 with tab1:
     st.markdown("여러 달이 섞인 **관리자 계획중량** 파일을 올리면 `작업일자`로 월을 자동 분리, "

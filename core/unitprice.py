@@ -115,3 +115,56 @@ def brand_table(cost, plan, m1, m2):
     piv = piv.reset_index()
     piv["단가증감"] = piv[f"사용단가_{m2}"] - piv[f"사용단가_{m1}"]
     return piv.sort_values(f"생산kg_{m2}", ascending=False)
+
+
+# ---------- 예상단가 기반 단위원가 전망 (BOM 고정 → 순수 단가 효과) ----------
+def forecast_uc_series(product, bom_x=None, fp=None):
+    """제품 단위원가(원/kg) 월별 전망 = Σ(배합률/100 × 예상단가).
+    반환: (DataFrame[년월, 단위원가, 단가커버율%], 제품 BOM DataFrame)"""
+    from . import model as _model, db as _db
+    if bom_x is None:
+        bom_x = _model.explode_bom()
+    if fp is None:
+        fp = _db.load_forecast()
+    fp = fp.copy(); fp["년월"] = fp["년월"].astype(str)
+    fp["원료코드"] = fp["원료코드"].astype(str)
+    sub = bom_x[bom_x["표준명칭"] == product][["ERP코드", "배합률"]].copy()
+    sub["ERP코드"] = sub["ERP코드"].astype(str)
+    rows = []
+    for ym, g in fp.groupby("년월"):
+        pm = dict(zip(g["원료코드"], g["단가"]))
+        m = sub.copy(); m["p"] = m["ERP코드"].map(pm)
+        cov = m.loc[m["p"].notna() & (m["p"] > 0), "배합률"].sum()
+        uc = float((m["배합률"] / 100.0 * m["p"].fillna(0)).sum())
+        rows.append((ym, uc, cov))
+    out = pd.DataFrame(rows, columns=["년월", "단위원가", "단가커버율%"]).sort_values("년월")
+    return out.reset_index(drop=True), sub
+
+
+def forecast_uc_bridge(product, m1, m2, bom_x=None, fp=None, name_map=None):
+    """두 달 사이 단위원가 변화의 원료별 기여 (정확 분해, BOM 고정).
+    기여(원/kg) = 배합률/100 × (단가m2 − 단가m1).  Σ기여 = Δ단위원가."""
+    from . import model as _model, db as _db
+    if bom_x is None:
+        bom_x = _model.explode_bom()
+    if fp is None:
+        fp = _db.load_forecast()
+    fp = fp.copy(); fp["년월"] = fp["년월"].astype(str)
+    fp["원료코드"] = fp["원료코드"].astype(str)
+    p1 = dict(zip(fp[fp["년월"] == m1]["원료코드"], fp[fp["년월"] == m1]["단가"]))
+    p2 = dict(zip(fp[fp["년월"] == m2]["원료코드"], fp[fp["년월"] == m2]["단가"]))
+    nm = dict(zip(fp["원료코드"], fp["원료명"]))
+    sub = bom_x[bom_x["표준명칭"] == product][["ERP코드", "배합률"]].copy()
+    sub["ERP코드"] = sub["ERP코드"].astype(str)
+    rows = []
+    for _, r in sub.iterrows():
+        c = r["ERP코드"]; w = r["배합률"]
+        a, b = float(p1.get(c, 0)), float(p2.get(c, 0))
+        rows.append({
+            "원료코드": c,
+            "원료명": nm.get(c) or (name_map.get(c, c) if name_map else c),
+            "배합률%": w, "단가_m1": a, "단가_m2": b, "단가변동": b - a,
+            "기여(원/kg)": w / 100.0 * (b - a),
+        })
+    df = pd.DataFrame(rows)
+    return df.sort_values("기여(원/kg)", key=lambda s: s.abs(), ascending=False)

@@ -79,6 +79,26 @@ def upsert_price(ym, price_rows):
     return out
 
 
+def load_forecast():
+    """예상단가: 년월·원료코드·원료명·단가. 시트 없으면 빈 DF."""
+    try:
+        return pd.read_excel(C.MAIN_DB, sheet_name="예상단가", dtype={"원료코드": str})
+    except Exception:
+        return pd.DataFrame(columns=["년월", "원료코드", "원료명", "단가"])
+
+
+def upsert_forecast_multi(months_dict):
+    """여러 달 예상단가 반영. months_dict{ym: DataFrame[원료코드,원료명,단가]}."""
+    cur = load_forecast()
+    cur = cur[~cur["년월"].astype(str).isin(list(months_dict.keys()))]
+    adds = []
+    for ym, df in months_dict.items():
+        a = df.copy(); a.insert(0, "년월", ym); adds.append(a)
+    out = pd.concat([cur] + adds, ignore_index=True) if adds else cur
+    _write_sheet("예상단가", out)
+    return out
+
+
 def upsert_price_multi(months_dict):
     """여러 달 단가·사용량을 한 번에 반영. months_dict{ym: DataFrame[원료코드,...]}."""
     cur = load_price()
