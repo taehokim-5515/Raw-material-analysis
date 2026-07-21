@@ -47,66 +47,6 @@ with c3:
     st.plotly_chart(fig, width='stretch')
     st.caption("1kg 만드는 데 드는 원료비. 오르면 단가↑ 또는 레시피 변경 신호.")
 
-st.divider()
-# ---- 단위원가 월별 전망 (BOM × 예상단가) + 원인 분해 ----
-st.subheader("📈 단위원가 월별 전망 (BOM × 예상단가)")
-from core import db as _db, unitprice as up
-fp = _db.load_forecast()
-if fp.empty:
-    st.info("예상단가 DB가 비어 있습니다. ‘데이터 관리 → 예상단가’ 탭에서 업로드하면 "
-            "미래 월까지 단위원가 전망과 원인 분해가 여기 표시됩니다.")
-else:
-    ucf, _bomsub = up.forecast_uc_series(prod, D["bom_x"], fp)
-    ucf = ucf[ucf["단위원가"] > 0]
-    if len(ucf) == 0:
-        st.warning("이 제품의 BOM 원료에 대한 예상단가가 없습니다.")
-    else:
-        st.caption("BOM(배합)은 고정하고 **원료 단가 변화만** 반영한 1kg당 원가입니다. "
-                   "생산이 없는 미래 월도 계산되므로, 단가 전망이 원가에 미칠 영향을 미리 볼 수 있습니다.")
-        figf = go.Figure(go.Scatter(x=ucf["년월"], y=ucf["단위원가"], mode="lines+markers+text",
-                                    line=dict(color="#0F6E56", width=3),
-                                    text=[f"{v:,.0f}" for v in ucf["단위원가"]],
-                                    textposition="top center", textfont=dict(size=10)))
-        figf.update_layout(height=340, margin=dict(t=30, b=10), xaxis=dict(type="category"))
-        st.plotly_chart(figf, width='stretch')
-        low_cov = ucf[ucf["단가커버율%"] < 99.5]
-        if len(low_cov):
-            st.warning("일부 월은 단가 없는 원료가 있어 과소계산됨: " +
-                       ", ".join(f"{r['년월']}({r['단가커버율%']:.0f}%)" for _, r in low_cov.iterrows()))
-
-        st.markdown("##### 🔎 단위원가 변화 원인 — 어떤 원료 단가 때문인가")
-        fmonths = list(ucf["년월"])
-        cc1, cc2 = st.columns(2)
-        i2 = len(fmonths) - 1
-        fm2 = cc2.selectbox("비교월", fmonths, index=i2, key="fuc_m2")
-        prev = [m for m in fmonths if m < fm2] or fmonths[:1]
-        fm1 = cc1.selectbox("기준월", fmonths, index=fmonths.index(prev[-1]), key="fuc_m1")
-        br = up.forecast_uc_bridge(prod, fm1, fm2, D["bom_x"], fp, D["name_map"])
-        u1v = float(ucf[ucf["년월"] == fm1]["단위원가"].iloc[0])
-        u2v = float(ucf[ucf["년월"] == fm2]["단위원가"].iloc[0])
-        st.markdown(f"단위원가 **{u1v:,.0f} → {u2v:,.0f}원/kg** "
-                    f"(**{u2v-u1v:+,.1f}원/kg**, {(u2v/u1v-1)*100:+.1f}%)" if u1v else "")
-        moved = br[br["기여(원/kg)"].abs() > 0.005]
-        if len(moved) == 0:
-            st.info("두 달 사이 단가가 변한 원료가 없습니다.")
-        else:
-            top = moved.head(12)
-            figb = go.Figure(go.Bar(
-                x=top["기여(원/kg)"], y=top["원료명"], orientation="h",
-                marker_color=["#D85A30" if v >= 0 else "#378ADD" for v in top["기여(원/kg)"]],
-                text=[f"{v:+,.1f}" for v in top["기여(원/kg)"]], textposition="auto"))
-            figb.update_layout(height=max(240, 34 * len(top) + 60), margin=dict(t=10, b=10),
-                               yaxis=dict(autorange="reversed"))
-            st.plotly_chart(figb, width='stretch')
-            st.caption("기여(원/kg) = 배합률 × 단가변동. 배합이 고정이라 **기여의 합 = 단위원가 변화**로 정확히 떨어집니다.")
-            tt = moved.copy()
-            tt["배합률"] = tt["배합률%"].map(lambda v: f"{v:.2f}%")
-            tt["단가(원/kg)"] = tt.apply(lambda r: f"{r['단가_m1']:,.0f} → {r['단가_m2']:,.0f}", axis=1)
-            tt["기여"] = tt["기여(원/kg)"].map(lambda v: f"{v:+,.2f}원/kg")
-            st.dataframe(tt[["원료코드", "원료명", "배합률", "단가(원/kg)", "기여"]],
-                         width='stretch', hide_index=True)
-
-st.divider()
 st.subheader("원료 구성 (선택 월)")
 months = sorted(usage["년월"].astype(str).unique())
 ym = st.select_slider("월", months, value=months[-1])
