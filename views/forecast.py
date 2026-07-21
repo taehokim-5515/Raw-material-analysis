@@ -30,11 +30,34 @@ if len(ucf) == 0:
 
 # ---- 월별 전망 곡선 ----
 st.subheader("단위원가 월별 추이·전망 (원/kg)")
-fig = go.Figure(go.Scatter(x=ucf["년월"], y=ucf["단위원가"], mode="lines+markers+text",
-                           line=dict(color="#0F6E56", width=3),
-                           text=[f"{v:,.0f}" for v in ucf["단위원가"]],
-                           textposition="top center", textfont=dict(size=10)))
-fig.update_layout(height=380, margin=dict(t=30, b=10), xaxis=dict(type="category"))
+view = st.radio("보기 방식", ["연속 보기", "연도별 겹치기"], horizontal=True,
+                label_visibility="collapsed")
+ucf2 = ucf.copy()
+ucf2["연도"] = ucf2["년월"].str[:4]
+ucf2["월"] = ucf2["년월"].str[5:7].astype(int)
+
+if view == "연속 보기":
+    fig = go.Figure(go.Scatter(x=ucf["년월"], y=ucf["단위원가"], mode="lines+markers+text",
+                               line=dict(color="#0F6E56", width=3),
+                               text=[f"{v:,.0f}" for v in ucf["단위원가"]],
+                               textposition="top center", textfont=dict(size=10)))
+    fig.update_layout(height=380, margin=dict(t=30, b=10), xaxis=dict(type="category"))
+else:
+    years = sorted(ucf2["연도"].unique())
+    sel_years = st.multiselect("연도 선택", years, default=years)
+    palette = ["#378ADD", "#D85A30", "#1D9E75", "#534AB7", "#BA7517", "#993556"]
+    fig = go.Figure()
+    for i, y in enumerate(sel_years):
+        g = ucf2[ucf2["연도"] == y].sort_values("월")
+        fig.add_scatter(x=[f"{m}월" for m in g["월"]], y=g["단위원가"],
+                        mode="lines+markers", name=y,
+                        line=dict(color=palette[i % len(palette)], width=3))
+    fig.update_layout(height=380, margin=dict(t=30, b=10),
+                      xaxis=dict(type="category",
+                                 categoryorder="array",
+                                 categoryarray=[f"{m}월" for m in range(1, 13)]),
+                      legend=dict(orientation="h", y=1.12))
+    st.caption("같은 달끼리 세로로 비교됩니다 — 연도별 단가 수준 차이와 계절성이 한눈에 보입니다.")
 st.plotly_chart(fig, width='stretch')
 low_cov = ucf[ucf["단가커버율%"] < 99.5]
 if len(low_cov):
