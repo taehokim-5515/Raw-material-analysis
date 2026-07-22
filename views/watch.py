@@ -19,19 +19,22 @@ D = load_all()
 m1, m2 = month_pickers(D["months"], key="watch")
 pw = dc.price_watch(m1, m2, D["name_map"])
 
+total_eff = pw[pw["단가변동%"] != float("inf")]["단가효과"].sum()  # 전 원료, 임계값 무관
 thr = st.slider("단가 변동 임계값 (±%)", 1, 30, 1)
 flag = pw[pw["단가변동%"].abs() >= thr].copy()
 up = flag[flag["단가변동%"] > 0]
 dn = flag[flag["단가변동%"] < 0]
 
 k = st.columns(4)
-k[0].metric(f"±{thr}% 이상 변동", f"{len(flag)}종")
-k[1].metric("상승 원료", f"{len(up)}종", f"영향 {sw(up['단가효과'].sum())}")
-k[2].metric("하락 원료", f"{len(dn)}종", f"영향 {sw(dn['단가효과'].sum())}")
-k[3].metric("단가효과 합계", sw(flag["단가효과"].sum()))
+k[0].metric("전체 단가효과 (전 원료·고정)", sw(total_eff))
+k[1].metric(f"±{thr}% 이상 변동", f"{len(flag)}종",
+            f"감시대상 합 {sw(flag['단가효과'].sum())}")
+k[2].metric("상승 원료", f"{len(up)}종", f"영향 {sw(up['단가효과'].sum())}")
+k[3].metric("하락 원료", f"{len(dn)}종", f"영향 {sw(dn['단가효과'].sum())}")
 st.caption("‘단가효과’ = 그 원료의 (단가변동 × **당월(비교월) 실적사용량**). "
-           "이번 달 실제로 쓴 양에 단가 변동을 곱한 값 = 실제 돈으로 본 파장. "
-           "(월 비교·원료 상세 페이지와 동일한 당월 가중)")
+           "**‘전체 단가효과’는 임계값과 무관한 회사 전체 값**이고, "
+           "임계값 슬라이더는 ‘어떤 원료를 감시 목록에 올릴지’만 정합니다 — "
+           "임계값을 올리면 경계 아래 원료가 목록에서 빠지므로 ‘감시대상 합’은 오르내릴 수 있습니다.")
 
 if len(flag) == 0:
     st.info(f"±{thr}% 이상 변동한 원료가 없습니다.")
