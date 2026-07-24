@@ -50,8 +50,11 @@ else:
     for i, y in enumerate(sel_years):
         g = ucf2[ucf2["연도"] == y].sort_values("월")
         fig.add_scatter(x=[f"{m}월" for m in g["월"]], y=g["단위원가"],
-                        mode="lines+markers", name=y,
-                        line=dict(color=palette[i % len(palette)], width=3))
+                        mode="lines+markers+text", name=y,
+                        line=dict(color=palette[i % len(palette)], width=3),
+                        text=[f"{v:,.0f}" for v in g["단위원가"]],
+                        textposition="top center" if i % 2 == 0 else "bottom center",
+                        textfont=dict(size=10, color=palette[i % len(palette)]))
     fig.update_layout(height=380, margin=dict(t=30, b=10),
                       xaxis=dict(type="category",
                                  categoryorder="array",
