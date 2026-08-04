@@ -2,6 +2,7 @@
 """사용단가(원/kg) 분석.
 전체/원료군 = DB 실적(금액÷사용량) 기준.  제품/브랜드 = BOM×계획중량 이론 단위원가.
 Δ사용단가 = 단가효과 + 믹스효과 + 교호 (3요인 분해)."""
+import numpy as np
 import pandas as pd
 from . import db, model, dims
 
@@ -168,3 +169,73 @@ def forecast_uc_bridge(product, m1, m2, bom_x=None, fp=None, name_map=None):
         })
     df = pd.DataFrame(rows)
     return df.sort_values("기여(원/kg)", key=lambda s: s.abs(), ascending=False)
+
+
+# ---------- 단위원가 통계 (수준·추세·변동 분리) ----------
+def forecast_split_month():
+    """실적 단가가 있는 마지막 월 = 실적구간/전망구간 경계."""
+    p = db.load_price()
+    if p.empty:
+        return None
+    return sorted(p["년월"].astype(str).unique())[-1]
+
+
+def uc_stats(ucf):
+    """단위원가 시계열 요약. ucf: DataFrame[년월, 단위원가]
+    CV는 추세를 함께 재므로 '추세제거CV'를 순수 변동성 지표로 사용."""
+    v = np.asarray(ucf["단위원가"], dtype=float)
+    n = len(v)
+    out = {"n": n, "평균": float(v.mean()) if n else 0.0,
+           "최소": float(v.min()) if n else 0.0, "최대": float(v.max()) if n else 0.0,
+           "표준편차": 0.0, "CV": 0.0, "추세제거CV": 0.0,
+           "월평균추세": 0.0, "월평균추세%": 0.0, "기간변화율": 0.0}
+    if n >= 2:
+        sd = float(v.std(ddof=1)); mu = out["평균"]
+        out["표준편차"] = sd
+        out["CV"] = sd / mu * 100 if mu else 0.0
+        out["기간변화율"] = (v[-1] / v[0] - 1) * 100 if v[0] else 0.0
+        t = np.arange(n)
+        b, a = np.polyfit(t, v, 1)
+        out["월평균추세"] = float(b)
+        out["월평균추세%"] = float(b) / mu * 100 if mu else 0.0
+        if n >= 3:
+            resid = v - (a + b * t)
+            out["추세제거CV"] = float(resid.std(ddof=1)) / mu * 100 if mu else 0.0
+    out["레인지%"] = (out["최대"] - out["최소"]) / out["평균"] * 100 if out["평균"] else 0.0
+    return out
+
+
+def uc_risk_contribution(product, months=None, bom_x=None, fp=None, name_map=None):
+    """원료별 '단위원가 변동' 기여도 분해.
+    RC_i = (배합률/100) × Cov(단가_i, 단위원가) / σ(단위원가);  Σ RC_i = σ(단위원가) 정확.
+    배합률이 커도 단가가 안 움직이면 기여 0, 배합률이 작아도 단가가 요동치면 기여가 큼."""
+    if bom_x is None:
+        bom_x = model.explode_bom()
+    if fp is None:
+        fp = db.load_forecast()
+    f = fp.copy()
+    f["년월"] = f["년월"].astype(str); f["원료코드"] = f["원료코드"].astype(str)
+    if months:
+        f = f[f["년월"].isin(list(months))]
+    sub = bom_x[bom_x["표준명칭"] == product][["ERP코드", "배합률"]].copy()
+    sub["ERP코드"] = sub["ERP코드"].astype(str)
+    piv = f.pivot_table(index="년월", columns="원료코드", values="단가", aggfunc="max").sort_index()
+    codes = [c for c in sub["ERP코드"] if c in piv.columns]
+    if len(piv) < 3 or not codes:
+        return pd.DataFrame(columns=["원료코드", "원료명", "배합률%", "단가σ", "기여", "기여비중%"]), 0.0
+    W = dict(zip(sub["ERP코드"], sub["배합률"]))
+    M = piv[codes].astype(float).fillna(0.0)
+    uc = sum(M[c] * W[c] / 100.0 for c in codes)
+    sigma = float(uc.std(ddof=1))
+    nm = dict(zip(f["원료코드"], f["원료명"]))
+    rows = []
+    for c in codes:
+        cov = float(np.cov(M[c].values, uc.values, ddof=1)[0, 1])
+        rc = (W[c] / 100.0) * cov / sigma if sigma else 0.0
+        rows.append({"원료코드": c,
+                     "원료명": nm.get(c) or (name_map.get(c, c) if name_map else c),
+                     "배합률%": W[c], "단가σ": float(M[c].std(ddof=1)),
+                     "단가평균": float(M[c].mean()), "기여": rc,
+                     "기여비중%": rc / sigma * 100 if sigma else 0.0})
+    df = pd.DataFrame(rows).sort_values("기여", key=lambda s: s.abs(), ascending=False)
+    return df.reset_index(drop=True), sigma
