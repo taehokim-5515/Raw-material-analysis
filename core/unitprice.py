@@ -239,3 +239,30 @@ def uc_risk_contribution(product, months=None, bom_x=None, fp=None, name_map=Non
                      "기여비중%": rc / sigma * 100 if sigma else 0.0})
     df = pd.DataFrame(rows).sort_values("기여", key=lambda s: s.abs(), ascending=False)
     return df.reset_index(drop=True), sigma
+
+
+def forecast_uc_matrix(bom_x=None, fp=None, products=None):
+    """전 제품 × 전 월 단위원가 행렬 (일괄 출력용, 행렬곱으로 일괄 계산).
+    반환: (uc, cov) — index=표준제품, columns=년월.
+      uc  = Σ(배합률/100 × 단가)  원/kg
+      cov = 단가가 존재하는 원료의 배합률 합 (%) — 100 미만이면 과소계산"""
+    if bom_x is None:
+        bom_x = model.explode_bom()
+    if fp is None:
+        fp = db.load_forecast()
+    f = fp.copy()
+    f["년월"] = f["년월"].astype(str); f["원료코드"] = f["원료코드"].astype(str)
+    P = f.pivot_table(index="년월", columns="원료코드", values="단가", aggfunc="max").sort_index()
+    b = bom_x.copy(); b["ERP코드"] = b["ERP코드"].astype(str)
+    if products:
+        b = b[b["표준명칭"].isin(list(products))]
+    B = b.pivot_table(index="표준명칭", columns="ERP코드", values="배합률", aggfunc="sum").fillna(0.0)
+    codes = [c for c in B.columns if c in P.columns]
+    if not codes or B.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    B2 = B[codes]
+    P2 = P[codes].fillna(0.0)
+    uc = pd.DataFrame(B2.values / 100.0 @ P2.values.T, index=B2.index, columns=P2.index)
+    cov = pd.DataFrame(B2.values @ (P2.values > 0).astype(float).T,
+                       index=B2.index, columns=P2.index)
+    return uc, cov
