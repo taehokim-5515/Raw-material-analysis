@@ -243,9 +243,11 @@ def uc_risk_contribution(product, months=None, bom_x=None, fp=None, name_map=Non
 
 def forecast_uc_matrix(bom_x=None, fp=None, products=None):
     """전 제품 × 전 월 단위원가 행렬 (일괄 출력용, 행렬곱으로 일괄 계산).
-    반환: (uc, cov) — index=표준제품, columns=년월.
-      uc  = Σ(배합률/100 × 단가)  원/kg
-      cov = 단가가 존재하는 원료의 배합률 합 (%) — 100 미만이면 과소계산"""
+    반환: (uc, cov, miss) — index=표준제품, columns=년월.
+      uc   = Σ(배합률/100 × 단가)  원/kg
+      cov  = 단가가 존재하는 원료의 배합률 합 (%)
+      miss = 단가가 없는(0원) BOM 원료 개수. **1 이상이면 그 칸은 과소계산**이며,
+             배합률이 작은 고가 원료가 빠지면 cov는 거의 100%라 잡히지 않으므로 miss를 기준으로 볼 것."""
     if bom_x is None:
         bom_x = model.explode_bom()
     if fp is None:
@@ -265,4 +267,32 @@ def forecast_uc_matrix(bom_x=None, fp=None, products=None):
     uc = pd.DataFrame(B2.values / 100.0 @ P2.values.T, index=B2.index, columns=P2.index)
     cov = pd.DataFrame(B2.values @ (P2.values > 0).astype(float).T,
                        index=B2.index, columns=P2.index)
-    return uc, cov
+    miss = pd.DataFrame((B2.values > 0).astype(float) @ (P2.values <= 0).astype(float).T,
+                        index=B2.index, columns=P2.index)
+    return uc, cov, miss
+
+
+def forecast_missing_detail(bom_x=None, fp=None):
+    """단가 결측 칸 상세 — 어떤 원료의 단가가 비어 있어 과소계산되는지."""
+    if bom_x is None:
+        bom_x = model.explode_bom()
+    if fp is None:
+        fp = db.load_forecast()
+    uc, cov, miss = forecast_uc_matrix(bom_x, fp)
+    cols = ["표준제품", "년월", "결측 원료수", "결측 원료"]
+    if uc.empty:
+        return pd.DataFrame(columns=cols)
+    f = fp.copy()
+    f["년월"] = f["년월"].astype(str); f["원료코드"] = f["원료코드"].astype(str)
+    P = f.pivot_table(index="년월", columns="원료코드", values="단가", aggfunc="max")
+    nm = dict(zip(f["원료코드"], f["원료명"]))
+    b = bom_x.copy(); b["ERP코드"] = b["ERP코드"].astype(str)
+    wmap = {p: dict(zip(g["ERP코드"], g["배합률"])) for p, g in b.groupby("표준명칭")}
+    rows = []
+    for (prod, ym), n in miss[miss > 0].stack().items():
+        w = wmap.get(prod, {})
+        bad = [c for c in w if c in P.columns and not (P.loc[ym, c] > 0)]
+        bad.sort(key=lambda x: -w[x])
+        rows.append({"표준제품": prod, "년월": ym, "결측 원료수": int(n),
+                     "결측 원료": ", ".join(f"{nm.get(c, c)} ({w[c]:.2f}%)" for c in bad)})
+    return pd.DataFrame(rows, columns=cols).sort_values(["표준제품", "년월"])
