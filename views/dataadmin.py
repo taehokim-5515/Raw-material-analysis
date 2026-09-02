@@ -120,53 +120,97 @@ with tab_uc:
         st.info("예상단가 DB가 비어 있습니다. ‘③ 예상단가’ 탭에서 먼저 업로드하세요.")
     else:
         bom_uc = model.explode_bom()
-        uc, cov = upx.forecast_uc_matrix(bom_uc, fp_uc)
+        uc, cov, miss = upx.forecast_uc_matrix(bom_uc, fp_uc)
         if uc.empty:
             st.warning("BOM과 예상단가가 겹치는 원료가 없습니다.")
         else:
             months_uc = list(uc.columns)
+            plan_uc = db.load_plan().copy()
+            plan_uc["년월"] = plan_uc["년월"].astype(str)
+            pm = (plan_uc.pivot_table(index="표준제품", columns="년월", values="계획중량",
+                                      aggfunc="sum")
+                  .reindex(index=uc.index, columns=months_uc).fillna(0))
+            produced = pm > 0
+            n_bad = int((miss > 0).sum().sum())
+
             c = st.columns(4)
             c[0].metric("제품 수", f"{len(uc)}종")
             c[1].metric("기간", f"{len(months_uc)}개월")
             c[2].metric("범위", f"{months_uc[0]} ~ {months_uc[-1]}")
-            c[3].metric("커버율 100% 미만", f"{int((cov < 99.5).sum().sum())}칸",
-                        help="해당 제품·월에 단가가 없는 원료가 있어 단위원가가 과소계산된 칸")
+            c[3].metric("단가 결측 칸", f"{n_bad}칸",
+                        help="BOM 원료 중 그 달 단가가 0원인 원료가 있어 단위원가가 과소계산되는 칸. "
+                             "배합률이 작아도 고가 원료면 원가가 크게 튀므로 커버율%가 아닌 이 값을 기준으로 봅니다.")
+
+            o1, o2 = st.columns(2)
+            hide_bad = o1.checkbox("단가 결측 칸 비우기", value=True,
+                                   help="단가 없는 원료가 섞인 달은 값을 비웁니다. 끄면 과소계산된 값이 그대로 보여, "
+                                        "나중에 그 원료 단가가 생기는 달에 급등한 것처럼 나타납니다.")
+            only_prod = o2.checkbox("생산 있는 달만 보기", value=False,
+                                    help="생산계획이 있는 달·제품만 남깁니다. 미래 전망 구간은 생산계획이 없어 사라지므로 기본은 꺼둡니다.")
 
             sel = st.multiselect("기간 선택 (비우면 전체)", months_uc, default=[])
             cols = sel or months_uc
-            out = uc[cols].round(0).astype(int).reset_index().rename(columns={"표준명칭": "표준제품"})
-            out.insert(1, "브랜드", out["표준제품"].map(dims.brand_of))
-            if len(cols) >= 2:
-                out.insert(2, "평균", uc[cols].mean(axis=1).round(0).astype(int).values)
-                out.insert(3, "최소", uc[cols].min(axis=1).round(0).astype(int).values)
-                out.insert(4, "최대", uc[cols].max(axis=1).round(0).astype(int).values)
-                first, lastc = cols[0], cols[-1]
-                chg = (uc[lastc] / uc[first].replace(0, pd.NA) - 1) * 100
-                out.insert(5, "기간변화율%", chg.round(1).values)
-            brands = ["전체"] + sorted(out["브랜드"].unique())
-            bsel = st.selectbox("브랜드 필터", brands)
-            view = out if bsel == "전체" else out[out["브랜드"] == bsel]
-            st.dataframe(view, width='stretch', hide_index=True, height=460)
+            if only_prod:
+                cols = [m for m in cols if bool(produced[m].any())]
 
-            f1, f2 = st.columns(2)
-            f1.download_button("📥 CSV 다운로드", view.to_csv(index=False).encode("utf-8-sig"),
-                               file_name=f"단위원가_일괄_{cols[0]}_{cols[-1]}.csv", mime="text/csv",
-                               width='stretch')
-            buf = BytesIO()
-            with pd.ExcelWriter(buf, engine="openpyxl") as w:
-                view.to_excel(w, sheet_name="단위원가", index=False)
-                cov[cols].round(1).reset_index().rename(columns={"표준명칭": "표준제품"}).to_excel(
-                    w, sheet_name="단가커버율%", index=False)
-            f2.download_button("📥 Excel 다운로드 (커버율 시트 포함)", buf.getvalue(),
-                               file_name=f"단위원가_일괄_{cols[0]}_{cols[-1]}.xlsx",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               width='stretch')
+            if not cols:
+                st.warning("선택 조건에 해당하는 달이 없습니다. ‘생산 있는 달만 보기’를 해제하거나 기간을 다시 선택하세요.")
+            else:
+                val = uc[cols].copy()
+                if hide_bad:
+                    val = val.mask(miss[cols] > 0)
+                if only_prod:
+                    val = val.mask(~produced[cols])
+                val = val.round(0)
 
-            low = cov[cols][cov[cols] < 99.5].stack()
-            if len(low):
-                with st.expander(f"⚠️ 단가 커버율 100% 미만 {len(low)}칸 — 과소계산 주의"):
-                    ldf = low.reset_index()
-                    ldf.columns = ["표준제품", "년월", "커버율%"]
-                    ldf["커버율%"] = ldf["커버율%"].round(1)
-                    st.dataframe(ldf, width='stretch', hide_index=True)
-                    st.caption("해당 제품·월에 예상단가가 없는 원료가 있습니다. ‘③ 예상단가’에서 누락 원료 단가를 채우면 해소됩니다.")
+                out = val.reset_index().rename(columns={"표준명칭": "표준제품"})
+                out.insert(1, "브랜드", out["표준제품"].map(dims.brand_of))
+                out.insert(2, "생산월수", produced[cols].sum(axis=1).values)
+                if len(cols) >= 2:
+                    out.insert(3, "평균", val.mean(axis=1).round(0).values)
+                    out.insert(4, "최소", val.min(axis=1).round(0).values)
+                    out.insert(5, "최대", val.max(axis=1).round(0).values)
+                    def _chg(r):
+                        v = r.dropna()
+                        return round((v.iloc[-1] / v.iloc[0] - 1) * 100, 1) if len(v) >= 2 and v.iloc[0] else None
+                    out.insert(6, "기간변화율%", val.apply(_chg, axis=1).values)
+
+                brands = ["전체"] + sorted(out["브랜드"].unique())
+                bsel = st.selectbox("브랜드 필터", brands, key="uc_brand")
+                view = out if bsel == "전체" else out[out["브랜드"] == bsel]
+                if only_prod:
+                    view = view[view["생산월수"] > 0]
+
+                cfg = {m: st.column_config.NumberColumn(m, format="%d") for m in cols}
+                for kk in ["평균", "최소", "최대"]:
+                    if kk in view.columns:
+                        cfg[kk] = st.column_config.NumberColumn(kk, format="%d")
+                if "기간변화율%" in view.columns:
+                    cfg["기간변화율%"] = st.column_config.NumberColumn("기간변화율%", format="%.1f%%")
+                st.dataframe(view, width='stretch', hide_index=True, height=460, column_config=cfg)
+                st.caption(f"표시 {len(view)}종 × {len(cols)}개월. "
+                           + ("빈칸 = 단가 결측(과소계산 방지). " if hide_bad else "⚠️ 결측 칸 포함 — 신규 원료 단가가 생기는 달에 급등처럼 보일 수 있습니다. ")
+                           + "‘생산월수’는 선택 기간 중 실제 생산계획이 있던 달 수입니다.")
+
+                detail = upx.forecast_missing_detail(bom_uc, fp_uc)
+                f1, f2 = st.columns(2)
+                f1.download_button("📥 CSV 다운로드", view.to_csv(index=False).encode("utf-8-sig"),
+                                   file_name=f"단위원가_일괄_{cols[0]}_{cols[-1]}.csv",
+                                   mime="text/csv", width='stretch')
+                buf = BytesIO()
+                with pd.ExcelWriter(buf, engine="openpyxl") as w:
+                    view.to_excel(w, sheet_name="단위원가", index=False)
+                    if len(detail):
+                        detail.to_excel(w, sheet_name="단가결측", index=False)
+                    (produced[cols].astype(int).reset_index()
+                     .rename(columns={"표준명칭": "표준제품"})).to_excel(w, sheet_name="생산여부", index=False)
+                f2.download_button("📥 Excel (결측·생산여부 시트 포함)", buf.getvalue(),
+                                   file_name=f"단위원가_일괄_{cols[0]}_{cols[-1]}.xlsx",
+                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                   width='stretch')
+
+                if n_bad:
+                    with st.expander(f"⚠️ 단가 결측 {n_bad}칸 — 어떤 원료 단가를 채워야 하나"):
+                        st.dataframe(detail, width='stretch', hide_index=True)
+                        st.caption("배합률이 작아도 고가 원료(예: 난각막 분말 45만원/kg, 배합 0.07%)가 빠지면 "
+                                   "단위원가가 300원/kg 이상 낮게 잡힙니다. ‘③ 예상단가’에서 해당 월 단가를 채우면 해소됩니다.")
