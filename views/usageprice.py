@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from app_common import load_all, month_pickers
-from core import unitprice as up
+from core import unitprice as up, theme
 
 st.title("⚖️ 사용단가 분석 (원/kg)")
 st.caption("**사용단가 = 원료금액 ÷ 원료사용량**, 즉 ‘원료를 kg당 평균 얼마에 쓰고 있나’입니다. "
@@ -28,7 +28,7 @@ def hbar(df, xcol, ycol, unit="원/kg", n=12, fmt=None):
     d = df.reindex(df[xcol].abs().sort_values(ascending=False).index).head(n)
     fmt = fmt or (lambda v: sgn(v, unit))
     f = go.Figure(go.Bar(x=d[xcol], y=d[ycol], orientation="h",
-        marker_color=["#D85A30" if v >= 0 else "#378ADD" for v in d[xcol]],
+        marker_color=[theme.UP if v >= 0 else theme.DOWN for v in d[xcol]],
         text=[fmt(v) for v in d[xcol]], textposition="auto"))
     f.update_layout(height=380, margin=dict(t=10, b=10), yaxis=dict(autorange="reversed"))
     st.plotly_chart(f, width='stretch')
@@ -52,9 +52,9 @@ with c1:
     st.subheader("사용단가 추이 (6개월)")
     fig = go.Figure()
     fig.add_scatter(x=acts["년월"], y=acts["사용단가"], mode="lines+markers",
-                    name="실적", line=dict(color="#D85A30", width=3))
+                    name="실적", line=dict(color=theme.UP, width=3))
     fig.add_scatter(x=theos["년월"], y=theos["사용단가"], mode="lines+markers",
-                    name="이론(BOM)", line=dict(color="#B4B2A9", width=2, dash="dot"))
+                    name="이론(BOM)", line=dict(color=theme.LIGHT, width=2, dash="dot"))
     fig.update_layout(height=340, margin=dict(t=10, b=10), xaxis=dict(type="category"),
                       legend=dict(orientation="h", y=1.12))
     st.plotly_chart(fig, width='stretch')
@@ -67,8 +67,8 @@ with c2:
         x=["기준"] + [s[0] for s in steps] + ["비교"],
         y=[sm["사용단가_m1"]] + [s[1] for s in steps] + [sm["사용단가_m2"]],
         text=[f"{sm['사용단가_m1']:,.0f}"] + [sgn(s[1], "") for s in steps] + [f"{sm['사용단가_m2']:,.0f}"],
-        textposition="outside", decreasing={"marker": {"color": "#378ADD"}},
-        increasing={"marker": {"color": "#D85A30"}}, totals={"marker": {"color": "#888780"}}))
+        textposition="outside", decreasing={"marker": {"color": theme.DOWN}},
+        increasing={"marker": {"color": theme.UP}}, totals={"marker": {"color": theme.NEUTRAL}}))
     fig.update_layout(height=340, margin=dict(t=20, b=10), showlegend=False, xaxis=dict(type="category"))
     st.plotly_chart(fig, width='stretch')
     st.caption("단가효과=원료 단가 변동 · 믹스효과=원료 구성 변화.")
@@ -125,8 +125,8 @@ st.header("5. 브랜드·제품별 사용단가 (이론 단위원가)")
 bt = up.brand_table(cost, D["plan"], m1, m2)
 bt2 = bt[(bt[f"생산kg_{m1}"] > 0) | (bt[f"생산kg_{m2}"] > 0)]
 fig = go.Figure()
-fig.add_bar(name=m1, x=bt2["브랜드"], y=bt2[f"사용단가_{m1}"], marker_color="#B5D4F4")
-fig.add_bar(name=m2, x=bt2["브랜드"], y=bt2[f"사용단가_{m2}"], marker_color="#378ADD")
+fig.add_bar(name=m1, x=bt2["브랜드"], y=bt2[f"사용단가_{m1}"], marker_color=theme.MUTED)
+fig.add_bar(name=m2, x=bt2["브랜드"], y=bt2[f"사용단가_{m2}"], marker_color=theme.RED)
 fig.update_layout(barmode="group", height=360, margin=dict(t=10, b=10),
                   legend=dict(orientation="h", y=1.12))
 st.plotly_chart(fig, width='stretch')

@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from app_common import load_all, won
-from core import model
+from core import model, theme
 
 st.title("📦 제품 드릴다운")
 
@@ -27,7 +27,7 @@ c1, c2, c3 = st.columns(3)
 with c1:
     st.subheader("생산량 (계획중량)")
     fig = go.Figure(go.Bar(x=pw.sort_values("년월")["년월"], y=pw.sort_values("년월")["계획중량"],
-                           marker_color="#1D9E75",
+                           marker_color=theme.GRAY,
                            text=[f"{v/1000:,.1f}t" for v in pw.sort_values("년월")["계획중량"]],
                            textposition="auto"))
     fig.update_layout(height=320, margin=dict(t=10, b=10), xaxis=dict(type="category"))
@@ -35,13 +35,13 @@ with c1:
 with c2:
     st.subheader("원료비 (총액)")
     fig = go.Figure(go.Scatter(x=pc.sort_values("년월")["년월"], y=pc.sort_values("년월")["원료비"],
-                               mode="lines+markers", line=dict(color="#534AB7", width=3)))
+                               mode="lines+markers", line=dict(color=theme.DARK, width=3)))
     fig.update_layout(height=320, margin=dict(t=10, b=10), xaxis=dict(type="category"))
     st.plotly_chart(fig, width='stretch')
 with c3:
     st.subheader("단위원가 (원/kg)")
     fig = go.Figure(go.Scatter(x=uc["년월"], y=uc["원가원단위"], mode="lines+markers",
-                               line=dict(color="#D85A30", width=3),
+                               line=dict(color=theme.UP, width=3),
                                text=[f"{v:,.0f}" for v in uc["원가원단위"]]))
     fig.update_layout(height=320, margin=dict(t=10, b=10), xaxis=dict(type="category"))
     st.plotly_chart(fig, width='stretch')

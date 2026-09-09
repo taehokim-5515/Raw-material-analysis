@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from app_common import load_all, month_pickers, won, signed_won
-from core import decompose as dc, dims
+from core import decompose as dc, dims, theme
 
 st.title("📊 원료비 원인분석 — 월 비교 (실적)")
 
@@ -36,9 +36,9 @@ if not LIMITED:
         x=[f"{m1}"] + [s[0] for s in steps] + [f"{m2}"],
         y=[tot1] + [s[1] for s in steps] + [tot2],
         text=[won(tot1)] + [signed_won(s[1]) for s in steps] + [won(tot2)],
-        textposition="outside", connector={"line": {"color": "#B4B2A9"}},
-        decreasing={"marker": {"color": "#378ADD"}}, increasing={"marker": {"color": "#D85A30"}},
-        totals={"marker": {"color": "#888780"}}))
+        textposition="outside", connector={"line": {"color": theme.LIGHT}},
+        decreasing={"marker": {"color": theme.DOWN}}, increasing={"marker": {"color": theme.UP}},
+        totals={"marker": {"color": theme.NEUTRAL}}))
     fig.update_layout(height=420, margin=dict(t=30, b=10), showlegend=False, xaxis=dict(type="category"))
     st.plotly_chart(fig, width='stretch')
     st.caption("단가영향 = Σ(단가변동 × 당월사용량) · 사용량영향 = Σ(사용량변동 × 전월단가). "
@@ -51,7 +51,7 @@ if not LIMITED:
     def _hbar(df, xcol, n=14):
         d = df.reindex(df[xcol].abs().sort_values(ascending=False).index).head(n)
         f = go.Figure(go.Bar(x=d[xcol], y=d["원료명"], orientation="h",
-            marker_color=["#D85A30" if v >= 0 else "#378ADD" for v in d[xcol]],
+            marker_color=[theme.UP if v >= 0 else theme.DOWN for v in d[xcol]],
             text=[signed_won(v) + "원" for v in d[xcol]], textposition="auto"))
         f.update_layout(height=440, margin=dict(t=10, b=10), yaxis=dict(autorange="reversed"))
         st.plotly_chart(f, width='stretch')
@@ -75,7 +75,7 @@ with left:
     pb = dc.product_bridge(cost, m1, m2)
     top = pd.concat([pb.head(8), pb.tail(4)])
     fig2 = go.Figure(go.Bar(x=top["금액증감"], y=top["표준제품"], orientation="h",
-        marker_color=["#D85A30" if v >= 0 else "#378ADD" for v in top["금액증감"]],
+        marker_color=[theme.UP if v >= 0 else theme.DOWN for v in top["금액증감"]],
         text=[signed_won(v) for v in top["금액증감"]], textposition="auto"))
     fig2.update_layout(height=430, margin=dict(t=10, b=10), yaxis=dict(autorange="reversed"))
     st.plotly_chart(fig2, width='stretch')
@@ -85,7 +85,7 @@ with right:
     ms = det.sort_values("금액변동", ascending=False)
     topm = pd.concat([ms.head(8), ms.tail(4)])
     fig3 = go.Figure(go.Bar(x=topm["금액변동"], y=topm["원료명"], orientation="h",
-        marker_color=["#D85A30" if v >= 0 else "#378ADD" for v in topm["금액변동"]],
+        marker_color=[theme.UP if v >= 0 else theme.DOWN for v in topm["금액변동"]],
         text=[signed_won(v) for v in topm["금액변동"]], textposition="auto"))
     fig3.update_layout(height=430, margin=dict(t=10, b=10), yaxis=dict(autorange="reversed"))
     st.plotly_chart(fig3, width='stretch')
@@ -123,8 +123,8 @@ with ga:
                f"전체 성장률({tot_growth:+.1f}%)보다 느리면 −, 빠르면 +** — 생산 쏠림 지표입니다.")
 with gb:
     fig4 = go.Figure()
-    fig4.add_bar(name=m1, x=order, y=[gp.loc[g, m1]/1000 for g in order], marker_color="#B5D4F4")
-    fig4.add_bar(name=m2, x=order, y=[gp.loc[g, m2]/1000 for g in order], marker_color="#378ADD")
+    fig4.add_bar(name=m1, x=order, y=[gp.loc[g, m1]/1000 for g in order], marker_color=theme.MUTED)
+    fig4.add_bar(name=m2, x=order, y=[gp.loc[g, m2]/1000 for g in order], marker_color=theme.RED)
     fig4.update_layout(barmode="group", height=340, margin=dict(t=10, b=10),
                        legend=dict(orientation="h", y=1.15), yaxis_title="톤")
     st.plotly_chart(fig4, width='stretch')
@@ -137,8 +137,8 @@ with st.expander("제품 단위 계획중량 TOP 보기"):
     w["합"] = w[m1] + w[m2]
     w = w.sort_values("합", ascending=False).head(15)
     fig5 = go.Figure()
-    fig5.add_bar(name=m1, x=w.index, y=w[m1], marker_color="#B5D4F4")
-    fig5.add_bar(name=m2, x=w.index, y=w[m2], marker_color="#378ADD")
+    fig5.add_bar(name=m1, x=w.index, y=w[m1], marker_color=theme.MUTED)
+    fig5.add_bar(name=m2, x=w.index, y=w[m2], marker_color=theme.RED)
     fig5.update_layout(barmode="group", height=380, margin=dict(t=10, b=10),
                        legend=dict(orientation="h", y=1.1))
     st.plotly_chart(fig5, width='stretch')

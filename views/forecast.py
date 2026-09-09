@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from app_common import load_all
-from core import db, unitprice as up
+from core import db, unitprice as up, theme
 
 st.title("📈 단위원가 전망 (BOM × 예상단가)")
 st.caption("배합(BOM)은 고정하고 **원료 단가 변화만** 반영한 제품 1kg당 원가입니다. "
@@ -71,7 +71,7 @@ if view == "연속 보기":
         g = ucf[ucf["년월"].isin(p_in)]
         fig.add_scatter(x=g["년월"], y=g["단위원가"], name="실적 구간",
                         mode="lines+markers+text" if show_label else "lines+markers",
-                        line=dict(color="#0F6E56", width=3),
+                        line=dict(color=theme.RED, width=3),
                         text=[f"{v:,.0f}" for v in g["단위원가"]] if show_label else None,
                         textposition="top center", textfont=dict(size=10))
     if f_in:
@@ -80,9 +80,9 @@ if view == "연속 보기":
         g = ucf[ucf["년월"].isin(link)]
         fig.add_scatter(x=g["년월"], y=g["단위원가"], name="전망 구간",
                         mode="lines+markers+text" if show_label else "lines+markers",
-                        line=dict(color="#BA7517", width=3, dash="dot"),
+                        line=dict(color=theme.GRAY, width=3, dash="dot"),
                         text=[f"{v:,.0f}" for v in g["단위원가"]] if show_label else None,
-                        textposition="bottom center", textfont=dict(size=10, color="#854F0B"))
+                        textposition="bottom center", textfont=dict(size=10, color=theme.GRAY))
     fig.update_layout(height=380, margin=dict(t=30, b=10), xaxis=dict(type="category"),
                       legend=dict(orientation="h", y=1.12))
 else:
@@ -90,7 +90,7 @@ else:
     u2["연도"] = u2["년월"].str[:4]; u2["월"] = u2["년월"].str[5:7].astype(int)
     years = sorted(u2["연도"].unique())
     sel_years = st.multiselect("연도 선택", years, default=years)
-    palette = ["#378ADD", "#D85A30", "#1D9E75", "#534AB7", "#BA7517", "#993556"]
+    palette = theme.CATEGORICAL
     fig = go.Figure()
     for i, y in enumerate(sel_years):
         g = u2[u2["연도"] == y].sort_values("월")
@@ -125,7 +125,7 @@ else:
     top = moved.head(12) if len(moved) else rc.head(12)
     figr = go.Figure(go.Bar(
         x=top["기여"], y=top["원료명"], orientation="h",
-        marker_color=["#D85A30" if v >= 0 else "#378ADD" for v in top["기여"]],
+        marker_color=[theme.UP if v >= 0 else theme.DOWN for v in top["기여"]],
         text=[f"{v:,.1f} ({p:.1f}%)" for v, p in zip(top["기여"], top["기여비중%"])],
         textposition="auto"))
     figr.update_layout(height=max(240, 34 * len(top) + 60), margin=dict(t=10, b=10),
@@ -170,7 +170,7 @@ else:
     top = moved.head(12)
     figb = go.Figure(go.Bar(
         x=top["기여(원/kg)"], y=top["원료명"], orientation="h",
-        marker_color=["#D85A30" if v >= 0 else "#378ADD" for v in top["기여(원/kg)"]],
+        marker_color=[theme.UP if v >= 0 else theme.DOWN for v in top["기여(원/kg)"]],
         text=[f"{v:+,.1f}" for v in top["기여(원/kg)"]], textposition="auto"))
     figb.update_layout(height=max(240, 34 * len(top) + 60), margin=dict(t=10, b=10),
                        yaxis=dict(autorange="reversed"))

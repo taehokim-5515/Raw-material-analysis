@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from app_common import load_all, month_pickers
-from core import decompose as dc
+from core import decompose as dc, theme
 
 st.title("🚨 단가 감시")
 st.caption("**생산 자동화 설비에서 집계된 실제(DB) 단가·사용량 기준**입니다. "
@@ -53,9 +53,9 @@ st.subheader("단가효과(원료비 영향) 큰 원료 TOP")
 top = tv.head(15)
 fig = go.Figure(go.Bar(
     x=top["단가효과"], y=top["원료명"], orientation="h",
-    marker_color=["#D85A30" if v >= 0 else "#378ADD" for v in top["단가효과"]],
+    marker_color=[theme.UP if v >= 0 else theme.DOWN for v in top["단가효과"]],
     text=[sw(v) for v in top["단가효과"]], textposition="auto"))
 fig.update_layout(height=460, margin=dict(t=10, b=10), yaxis=dict(autorange="reversed"))
 st.plotly_chart(fig, width='stretch')
-st.caption("빨강=단가 상승으로 원료비 증가, 파랑=단가 하락으로 절감. "
+st.caption("빨강=단가 상승으로 원료비 증가, 진회색=단가 하락으로 절감. "
            "단가가 크게 올라도 안 쓰는 원료면 영향은 작고, 조금 올라도 많이 쓰면 큽니다.")

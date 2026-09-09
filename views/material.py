@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from app_common import load_all, month_pickers, won, kg, signed_won
-from core import decompose as dc
+from core import decompose as dc, theme
 
 st.title("🧪 원료 드릴다운 — 사용단가·사용량 원인추적")
 st.caption("**설비 실적(DB)** 단가·사용량이 기준입니다. 아래 ‘제품 귀속’만 BOM×계획중량 기반 "
@@ -64,18 +64,18 @@ c1, c2 = st.columns(2)
 with c1:
     st.subheader("단가 추이 (원/kg)")
     fig = go.Figure(go.Scatter(x=pr["년월"], y=pr["단가"], mode="lines+markers",
-                               line=dict(color="#D85A30", width=3), name="실적 단가"))
+                               line=dict(color=theme.UP, width=3), name="실적 단가"))
     fig.update_layout(height=340, margin=dict(t=10, b=10), xaxis=dict(type="category"))
     st.plotly_chart(fig, width='stretch')
 with c2:
     st.subheader("사용량 추이 (kg)")
     fig = go.Figure()
-    fig.add_bar(x=pr["년월"], y=pr["실적사용kg"], name="실적 사용량", marker_color="#0F6E56")
+    fig.add_bar(x=pr["년월"], y=pr["실적사용kg"], name="실적 사용량", marker_color=theme.RED)
     if has_bom:
         ty = [theo_map.get(m, 0) for m in pr["년월"]]
         if any(v > 0 for v in ty):
             fig.add_scatter(x=pr["년월"], y=ty, name="이론(BOM×계획)", mode="lines+markers",
-                            line=dict(color="#BA7517", width=2, dash="dot"))
+                            line=dict(color=theme.GRAY, width=2, dash="dot"))
     fig.update_layout(height=340, margin=dict(t=10, b=10), xaxis=dict(type="category"),
                       legend=dict(orientation="h", y=1.15))
     st.plotly_chart(fig, width='stretch')
@@ -108,7 +108,7 @@ else:
         top = attr.head(12)
         fig = go.Figure(go.Bar(
             x=top["사용kg증감"], y=top["표준제품"], orientation="h",
-            marker_color=["#D85A30" if v >= 0 else "#378ADD" for v in top["사용kg증감"]],
+            marker_color=[theme.UP if v >= 0 else theme.DOWN for v in top["사용kg증감"]],
             text=[f"{v:+,.0f}kg" for v in top["사용kg증감"]], textposition="auto"))
         fig.update_layout(height=max(240, 34 * len(top) + 60), margin=dict(t=10, b=10),
                           yaxis=dict(autorange="reversed"))

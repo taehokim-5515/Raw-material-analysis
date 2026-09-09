@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from app_common import load_all, month_pickers, won, signed_won
-from core import decompose as dc
+from core import decompose as dc, theme
 
 st.title("📋 원료 상세 — 실적·전사")
 st.caption("**설비 실적(DB) 전 원료** 기준. 기존 원가영향 분석과 동일하게 "
@@ -47,7 +47,7 @@ st.subheader("금액변동 TOP (증가·감소)")
 top = pd.concat([det.head(12), det.tail(8)])
 fig = go.Figure(go.Bar(
     x=top["금액변동"], y=top["원료명"], orientation="h",
-    marker_color=["#D85A30" if v >= 0 else "#378ADD" for v in top["금액변동"]],
+    marker_color=[theme.UP if v >= 0 else theme.DOWN for v in top["금액변동"]],
     text=[signed_won(v) for v in top["금액변동"]], textposition="auto"))
 fig.update_layout(height=560, margin=dict(t=10, b=10), yaxis=dict(autorange="reversed"))
 st.plotly_chart(fig, width='stretch')
