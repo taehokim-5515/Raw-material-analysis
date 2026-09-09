@@ -7,8 +7,10 @@ harimpetfood = "full"
 cham = "material"
 """
 import streamlit as st
+from core import theme
 
 st.set_page_config(page_title="원료비 원인분석", page_icon="📊", layout="wide")
+theme.apply_plotly()   # Plotly 전역 브랜드 템플릿
 
 # ---- 접속 코드 → 권한 (Cloud Secrets 있으면 우선) ----
 ACCESS = {"harimpetfood": "full", "cham": "material"}
