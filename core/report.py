@@ -8,7 +8,7 @@ from email.mime.multipart import MIMEMultipart
 import pandas as pd
 from . import db, model, decompose as dc, dims, config as C
 
-RED, BLUE, GRAY, BG = "#D85A30", "#378ADD", "#5F5E5A", "#F7F6F3"
+RED, BLUE, GRAY, BG = "#DA291C", "#3E4A54", "#5F5E5A", "#F5F5F5"
 MAIL_CFG = C.DATA / "mail_config.json"
 
 
