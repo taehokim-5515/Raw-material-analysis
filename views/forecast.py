@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""단위원가 전망 — BOM(고정) × 예상단가. 수준·추세·변동 요약 + 변동 원인(원료별 기여)."""
+"""단위원가 전망 — 월별 유효 배합비 × 예상단가. 수준·추세·변동 요약 + 변동 원인(원료별 기여)."""
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -7,8 +7,9 @@ from app_common import load_all
 from core import db, unitprice as up, theme
 
 st.title("📈 단위원가 전망 (BOM × 예상단가)")
-st.caption("배합(BOM)은 고정하고 **원료 단가 변화만** 반영한 제품 1kg당 원가입니다. "
-           "데이터는 ‘데이터 관리 → ③ 예상단가’에서 업로드합니다.")
+st.caption("제품 1kg당 원가입니다. 배합비는 **그 달에 유효한 버전**이 적용되므로, "
+           "배합을 바꾼 달 전후는 서로 다른 배합으로 환산됩니다. "
+           "데이터는 ‘데이터 관리 → ③ 예상단가’, 배합비는 ‘→ ⑥ 배합비(BOM) 버전’에서 관리합니다.")
 
 D = load_all()
 fp = db.load_forecast()
@@ -16,12 +17,12 @@ if fp.empty:
     st.info("예상단가 DB가 비어 있습니다. ‘데이터 관리 → ③ 예상단가’ 탭에서 업로드하세요.")
     st.stop()
 
-prods = sorted(set(D["bom_x"]["표준명칭"].unique()))
+prods = sorted(set(D["bom_all"]["표준명칭"].unique()))
 c_top1, c_top2 = st.columns([2, 3])
 prod = c_top1.selectbox("제품 선택", prods,
                         index=prods.index("더리얼 GF 닭고기 어덜트") if "더리얼 GF 닭고기 어덜트" in prods else 0)
 
-ucf_all, _sub = up.forecast_uc_series(prod, D["bom_x"], fp)
+ucf_all, _sub = up.forecast_uc_series(prod, None, fp, D["bom_all"])
 ucf_all = ucf_all[ucf_all["단위원가"] > 0].reset_index(drop=True)
 if len(ucf_all) == 0:
     st.warning("이 제품의 BOM 원료에 대한 예상단가가 없습니다.")
@@ -115,12 +116,13 @@ st.divider()
 
 # ---- 🌊 무엇이 원가를 흔드는가 (원료별 변동 기여도) ----
 st.subheader("🌊 무엇이 원가를 흔드는가 — 원료별 변동 기여도")
-rc, sigma = up.uc_risk_contribution(prod, sel_m, D["bom_x"], fp, D["name_map"])
+rc, sigma = up.uc_risk_contribution(prod, sel_m, D["bom_x"], fp, D["name_map"])  # 현재 배합 고정
 if len(rc) == 0:
     st.info("기간이 3개월 미만이라 변동 기여도를 계산할 수 없습니다.")
 else:
     st.markdown(f"이 기간 단위원가의 표준편차는 **{sigma:,.1f}원/kg**이고, 아래 기여도의 합과 정확히 일치합니다. "
-                "배합률이 커도 단가가 안 움직이면 기여가 0이고, 배합률이 작아도 단가가 요동치면 기여가 큽니다.")
+                "배합률이 커도 단가가 안 움직이면 기여가 0이고, 배합률이 작아도 단가가 요동치면 기여가 큽니다. "
+                "이 표는 **현재 배합 기준**으로 단가 변동 리스크만 봅니다(배합비 변경 효과는 아래 두 달 비교에서).")
     moved = rc[rc["기여"].abs() > 0.05]
     top = moved.head(12) if len(moved) else rc.head(12)
     figr = go.Figure(go.Bar(
@@ -154,7 +156,7 @@ fm2 = c2.selectbox("비교월", sel_m, index=len(sel_m) - 1, key="fc_m2")
 prev = [m for m in sel_m if m < fm2] or sel_m[:1]
 fm1 = c1.selectbox("기준월", sel_m, index=sel_m.index(prev[-1]), key="fc_m1")
 
-br = up.forecast_uc_bridge(prod, fm1, fm2, D["bom_x"], fp, D["name_map"])
+br = up.forecast_uc_bridge(prod, fm1, fm2, None, fp, D["name_map"], D["bom_all"])
 u1v = float(ucf[ucf["년월"] == fm1]["단위원가"].iloc[0])
 u2v = float(ucf[ucf["년월"] == fm2]["단위원가"].iloc[0])
 k2 = st.columns(3)
@@ -175,10 +177,18 @@ else:
     figb.update_layout(height=max(240, 34 * len(top) + 60), margin=dict(t=10, b=10),
                        yaxis=dict(autorange="reversed"))
     st.plotly_chart(figb, width='stretch')
-    st.caption("기여(원/kg) = 배합률 × 단가변동. 배합이 고정이라 **기여의 합 = 단위원가 변화**로 정확히 떨어집니다.")
+    st.caption("기여(원/kg) = **단가기여**(배합률 × 단가변동) + **배합기여**(배합률변동 × 전월단가). "
+               "두 달의 배합비가 달라도 **기여의 합 = 단위원가 변화**로 정확히 떨어집니다.")
     tt = moved.copy()
-    tt["배합률"] = tt["배합률%"].map(lambda v: f"{v:.2f}%")
+    rec = tt["배합기여"].abs().sum() > 0.005
+    tt["배합률"] = (tt.apply(lambda r: f"{r['배합률_m1']:.2f}% → {r['배합률_m2']:.2f}%", axis=1)
+                  if rec else tt["배합률%"].map(lambda v: f"{v:.2f}%"))
     tt["단가(원/kg)"] = tt.apply(lambda r: f"{r['단가_m1']:,.0f} → {r['단가_m2']:,.0f}", axis=1)
+    tt["단가기여"] = tt["단가기여"].map(lambda v: f"{v:+,.1f}")
+    tt["배합기여"] = tt["배합기여"].map(lambda v: f"{v:+,.1f}")
     tt["기여"] = tt["기여(원/kg)"].map(lambda v: f"{v:+,.1f}원/kg")
-    st.dataframe(tt[["원료코드", "원료명", "배합률", "단가(원/kg)", "기여"]],
-                 width='stretch', hide_index=True)
+    _cols = ["원료코드", "원료명", "배합률", "단가(원/kg)"] + (["단가기여", "배합기여"] if rec else []) + ["기여"]
+    st.dataframe(tt[_cols], width='stretch', hide_index=True)
+    if rec:
+        st.success(f"이 구간에 **배합비가 바뀌었습니다** — 배합기여 합계 "
+                   f"{moved['배합기여'].sum():+,.1f}원/kg. 단가 변동분과 분리되어 표시됩니다.")

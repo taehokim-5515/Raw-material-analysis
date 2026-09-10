@@ -7,9 +7,12 @@ from core import db, model, decompose as dc
 
 @st.cache_data(show_spinner=False)
 def load_all():
-    bom_x = model.explode_bom()
     plan = db.load_plan()
-    usage = model.theoretical_usage(plan, bom_x)
+    bom_all = db.load_bom_all()                    # 버전 포함 전체 배합비
+    pmonths = sorted(plan["년월"].astype(str).unique())
+    bom_ml = model.bom_long(pmonths, bom_all)      # 월별 유효 배합비(롱포맷)
+    bom_x = model.explode_bom_at(pmonths[-1] if pmonths else None, bom_all)  # 최신=전망용
+    usage = model.theoretical_usage(plan, bom_ml)
     cost = model.cost_table(usage)
     price = db.load_price()
     mm = db.load_material_master()
@@ -19,9 +22,14 @@ def load_all():
         sub = price[price["년월"].astype(str) == m]
         for c, n in zip(sub["원료코드"], sub["원료명"]):
             name_map.setdefault(c, n)
+    for c, n in zip(bom_all["ERP코드"].astype(str), bom_all["원료한글명"]):
+        if n:
+            name_map.setdefault(c, n)
     months = sorted(set(plan["년월"].astype(str)) & set(price["년월"].astype(str)))
-    bom_codes = set(bom_x["ERP코드"].astype(str))
-    return dict(bom_x=bom_x, plan=plan, usage=usage, cost=cost,
+    bom_codes = set(bom_ml["ERP코드"].astype(str))          # 전 버전 합집합
+    bom_vers = sorted(bom_all["적용시작"].astype(str).unique())
+    return dict(bom_x=bom_x, bom_ml=bom_ml, bom_all=bom_all, bom_vers=bom_vers,
+                plan=plan, usage=usage, cost=cost,
                 price=price, name_map=name_map, months=months, bom_codes=bom_codes)
 
 

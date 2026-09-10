@@ -110,9 +110,150 @@ def load_forecast():
     except Exception:
         return pd.DataFrame(columns=["년월", "원료코드", "원료명", "단가"])
 
+# ---------------- 배합비(BOM) — 버전 관리 ----------------
+_BOM_COLS = ["적용시작", "표준명칭", "ERP코드", "원료한글명", "배합률"]
+
+
+def load_bom_all():
+    """버전 포함 전체 배합비.
+    적용시작(YYYY-MM) = 그 배합이 적용되기 시작한 월. 종료월은 두지 않고,
+    같은 제품의 다음 버전 적용시작 직전까지 유효하다(공백·중복 구간 불가)."""
+    if _sb():
+        try:
+            rows = _fetch_all("bom")
+        except Exception:
+            rows = None          # 테이블 미생성 → 파일 시드로 폴백
+        if rows:
+            df = pd.DataFrame(rows).rename(columns={
+                "eff_from": "적용시작", "product": "표준명칭", "code": "ERP코드",
+                "name": "원료한글명", "ratio": "배합률"})
+            df["ERP코드"] = df["ERP코드"].astype(str)
+            df["적용시작"] = df["적용시작"].astype(str)
+            for c in _BOM_COLS:
+                if c not in df.columns:
+                    df[c] = "" if c == "원료한글명" else 0
+            return df[_BOM_COLS]
+    return _bom_from_file()
+
+
+def _bom_from_file():
+    """bom_master.xlsx(BOM 시트) → 버전 스키마. 적용시작 없으면 기준버전으로 간주."""
+    df = pd.read_excel(C.BOM_XLSX, sheet_name="BOM", dtype={"ERP코드": str})
+    if "적용시작" not in df.columns:
+        df["적용시작"] = C.BOM_BASE_YM
+    if "원료한글명" not in df.columns:
+        df["원료한글명"] = ""
+    df["적용시작"] = df["적용시작"].astype(str)
+    df["표준명칭"] = df["표준명칭"].astype(str)
+    df["ERP코드"] = df["ERP코드"].astype(str)
+    return df[_BOM_COLS]
+
+
+def pick_bom_version(bom_all, ym=None):
+    """제품별로 ym 시점에 유효한 버전만 남긴다(적용시작 ≤ ym 중 최신).
+    ym=None이면 제품별 최신 버전."""
+    d = bom_all.copy()
+    d["적용시작"] = d["적용시작"].astype(str)
+    if ym is not None:
+        d = d[d["적용시작"] <= str(ym)]
+    if d.empty:
+        return d
+    keep = d.groupby("표준명칭")["적용시작"].transform("max")
+    return d[d["적용시작"] == keep]
+
+
+def load_bom(ym=None):
+    """(하위호환) 단일 배합비 표. ym 지정 시 그 달에 유효한 버전."""
+    return pick_bom_version(load_bom_all(), ym)
+
+
+def bom_versions():
+    """버전 목록 — 적용시작별 제품수·행수."""
+    a = load_bom_all()
+    if a.empty:
+        return pd.DataFrame(columns=["적용시작", "제품수", "원료행수"])
+    g = (a.groupby("적용시작")
+         .agg(제품수=("표준명칭", "nunique"), 원료행수=("ERP코드", "size"))
+         .reset_index().sort_values("적용시작"))
+    return g
+
+
+def bom_version_products():
+    """버전×제품 목록 — 배합률 합계 검증용."""
+    a = load_bom_all()
+    if a.empty:
+        return pd.DataFrame(columns=["적용시작", "표준명칭", "원료수", "배합합%"])
+    return (a.groupby(["적용시작", "표준명칭"])
+            .agg(원료수=("ERP코드", "size"), **{"배합합%": ("배합률", "sum")})
+            .reset_index().sort_values(["표준명칭", "적용시작"]))
+
+
+def _write_bom(df):
+    with pd.ExcelWriter(C.BOM_XLSX, engine="openpyxl", mode="a",
+                        if_sheet_exists="replace") as w:
+        df[_BOM_COLS].to_excel(w, sheet_name="BOM", index=False)
+
+
+def _bom_rows(df, eff, note=None):
+    return [{"eff_from": eff, "product": str(r["표준명칭"]), "code": str(r["ERP코드"]),
+             "name": str(r.get("원료한글명") or ""), "ratio": float(r["배합률"]),
+             "note": note} for _, r in df.iterrows()]
+
+
+def upsert_bom_version(eff_from, df, note=None):
+    """배합비 버전 저장 — 해당 적용시작월 × **업로드에 포함된 제품만** 교체.
+    파일에 없는 제품의 기존 버전은 손대지 않는다."""
+    eff = str(eff_from)
+    d = df.copy()
+    d["표준명칭"] = d["표준명칭"].astype(str)
+    d["ERP코드"] = d["ERP코드"].astype(str)
+    if "원료한글명" not in d.columns:
+        d["원료한글명"] = ""
+    prods = sorted(d["표준명칭"].unique())
+    if _sb():
+        sb = _sb()
+        for i in range(0, len(prods), 100):
+            sb.table("bom").delete().eq("eff_from", eff).in_("product", prods[i:i + 100]).execute()
+        rows = _bom_rows(d, eff, note)
+        for i in range(0, len(rows), 500):
+            sb.table("bom").insert(rows[i:i + 500]).execute()
+        return load_bom_all()
+    cur = load_bom_all()
+    cur = cur[~((cur["적용시작"] == eff) & (cur["표준명칭"].isin(prods)))]
+    d["적용시작"] = eff
+    out = pd.concat([cur, d[_BOM_COLS]], ignore_index=True)
+    _write_bom(out)
+    return out
+
+
+def delete_bom_version(eff_from, products=None):
+    """버전 삭제. products 지정 시 그 제품만."""
+    eff = str(eff_from)
+    if _sb():
+        sb = _sb()
+        q = sb.table("bom").delete().eq("eff_from", eff)
+        if products:
+            q = q.in_("product", list(products))
+        q.execute()
+        return load_bom_all()
+    cur = load_bom_all()
+    hit = cur["적용시작"] == eff
+    if products:
+        hit &= cur["표준명칭"].isin(list(products))
+    out = cur[~hit]
+    _write_bom(out)
+    return out
+
+
+def seed_bom_from_file(eff_from=None):
+    """bom_master.xlsx의 현재 배합비를 기준버전으로 DB에 적재(최초 1회)."""
+    base = _bom_from_file()
+    eff = str(eff_from or C.BOM_BASE_YM)
+    base = base.copy(); base["적용시작"] = eff
+    return upsert_bom_version(eff, base, note="bom_master.xlsx 기준버전 시드")
+
+
 # dim은 파일 유지
-def load_bom():
-    return pd.read_excel(C.BOM_XLSX, sheet_name="BOM", dtype={"ERP코드": str})
 
 def load_material_master():
     return pd.read_excel(C.BOM_XLSX, sheet_name="원료마스터", dtype={"ERP코드": str})

@@ -119,53 +119,94 @@ def brand_table(cost, plan, m1, m2):
 
 
 # ---------- 예상단가 기반 단위원가 전망 (BOM 고정 → 순수 단가 효과) ----------
-def forecast_uc_series(product, bom_x=None, fp=None):
+def _bom_months(months, bom_x=None, bom_all=None):
+    """{년월: 전개 배합비} — **그 달에 유효한 버전**을 적용한다.
+    bom_x에 `년월` 없는 단일 배합비를 넘기면 전 구간 고정(하위호환)."""
+    months = sorted({str(m) for m in months})
+    if bom_x is not None and "년월" not in list(bom_x.columns):
+        return {m: bom_x for m in months}
+    if bom_all is None:
+        bom_all = db.load_bom_all()
+    out, cache = {}, {}
+    for m in months:
+        d = db.pick_bom_version(bom_all, m)
+        sig = tuple(sorted(set(zip(d["표준명칭"], d["적용시작"].astype(str)))))
+        if sig not in cache:
+            cache[sig] = model.explode_bom(d)
+        out[m] = cache[sig]
+    return out
+
+
+def forecast_uc_series(product, bom_x=None, fp=None, bom_all=None):
     """제품 단위원가(원/kg) 월별 전망 = Σ(배합률/100 × 예상단가).
-    반환: (DataFrame[년월, 단위원가, 단가커버율%], 제품 BOM DataFrame)"""
-    from . import model as _model, db as _db
-    if bom_x is None:
-        bom_x = _model.explode_bom()
+    배합비는 **그 달에 유효한 버전**을 쓴다 — 3월에 배합을 바꿨다면 2월까지는 옛 배합,
+    3월부터는 새 배합으로 환산된다.
+    반환: (DataFrame[년월, 단위원가, 단가커버율%, 배합버전], 마지막 달 제품 BOM)"""
     if fp is None:
-        fp = _db.load_forecast()
-    fp = fp.copy(); fp["년월"] = fp["년월"].astype(str)
+        fp = db.load_forecast()
+    fp = fp.copy()
+    fp["년월"] = fp["년월"].astype(str)
     fp["원료코드"] = fp["원료코드"].astype(str)
-    sub = bom_x[bom_x["표준명칭"] == product][["ERP코드", "배합률"]].copy()
-    sub["ERP코드"] = sub["ERP코드"].astype(str)
-    rows = []
-    for ym, g in fp.groupby("년월"):
-        pm = dict(zip(g["원료코드"], g["단가"]))
-        m = sub.copy(); m["p"] = m["ERP코드"].map(pm)
-        cov = m.loc[m["p"].notna() & (m["p"] > 0), "배합률"].sum()
-        uc = float((m["배합률"] / 100.0 * m["p"].fillna(0)).sum())
-        rows.append((ym, uc, cov))
-    out = pd.DataFrame(rows, columns=["년월", "단위원가", "단가커버율%"]).sort_values("년월")
-    return out.reset_index(drop=True), sub
+    months = sorted(fp["년월"].unique())
+    bm = _bom_months(months, bom_x, bom_all)
+    if bom_all is None and (bom_x is None or "년월" in list(bom_x.columns)):
+        bom_all = db.load_bom_all()
+    vmap = {}
+    if bom_all is not None:
+        for m in months:
+            d = db.pick_bom_version(bom_all, m)
+            d = d[d["표준명칭"] == product]
+            vmap[m] = str(d["적용시작"].iloc[0]) if len(d) else ""
+
+    rows, sub = [], pd.DataFrame(columns=["ERP코드", "배합률"])
+    for ym in months:
+        e = bm[ym]
+        sub = e[e["표준명칭"] == product][["ERP코드", "배합률"]].copy()
+        sub["ERP코드"] = sub["ERP코드"].astype(str)
+        g = fp[fp["년월"] == ym]
+        pmap = dict(zip(g["원료코드"], g["단가"]))
+        m_ = sub.copy()
+        m_["p"] = m_["ERP코드"].map(pmap)
+        cov = m_.loc[m_["p"].notna() & (m_["p"] > 0), "배합률"].sum()
+        uc = float((m_["배합률"] / 100.0 * m_["p"].fillna(0)).sum())
+        rows.append((ym, uc, cov, vmap.get(ym, "")))
+    out = pd.DataFrame(rows, columns=["년월", "단위원가", "단가커버율%", "배합버전"])
+    return out.sort_values("년월").reset_index(drop=True), sub
 
 
-def forecast_uc_bridge(product, m1, m2, bom_x=None, fp=None, name_map=None):
-    """두 달 사이 단위원가 변화의 원료별 기여 (정확 분해, BOM 고정).
-    기여(원/kg) = 배합률/100 × (단가m2 − 단가m1).  Σ기여 = Δ단위원가."""
-    from . import model as _model, db as _db
-    if bom_x is None:
-        bom_x = _model.explode_bom()
+def forecast_uc_bridge(product, m1, m2, bom_x=None, fp=None, name_map=None, bom_all=None):
+    """두 달 사이 단위원가 변화의 원료별 기여 (정확 분해).
+    기여 = 단가기여 + 배합기여
+         = 배합률₂/100 × Δ단가  +  Δ배합률/100 × 단가₁
+    배합비가 바뀐 구간에서도 Σ기여 = Δ단위원가 로 정확히 떨어진다."""
     if fp is None:
-        fp = _db.load_forecast()
-    fp = fp.copy(); fp["년월"] = fp["년월"].astype(str)
+        fp = db.load_forecast()
+    fp = fp.copy()
+    fp["년월"] = fp["년월"].astype(str)
     fp["원료코드"] = fp["원료코드"].astype(str)
     p1 = dict(zip(fp[fp["년월"] == m1]["원료코드"], fp[fp["년월"] == m1]["단가"]))
     p2 = dict(zip(fp[fp["년월"] == m2]["원료코드"], fp[fp["년월"] == m2]["단가"]))
     nm = dict(zip(fp["원료코드"], fp["원료명"]))
-    sub = bom_x[bom_x["표준명칭"] == product][["ERP코드", "배합률"]].copy()
-    sub["ERP코드"] = sub["ERP코드"].astype(str)
+
+    bm = _bom_months([m1, m2], bom_x, bom_all)
+    def _w(ym):
+        e = bm[ym]
+        s = e[e["표준명칭"] == product]
+        return dict(zip(s["ERP코드"].astype(str), s["배합률"]))
+    w1, w2 = _w(m1), _w(m2)
+
     rows = []
-    for _, r in sub.iterrows():
-        c = r["ERP코드"]; w = r["배합률"]
+    for c in sorted(set(w1) | set(w2)):
+        r1, r2 = float(w1.get(c, 0.0)), float(w2.get(c, 0.0))
         a, b = float(p1.get(c, 0)), float(p2.get(c, 0))
+        pe = r2 / 100.0 * (b - a)
+        re_ = (r2 - r1) / 100.0 * a
         rows.append({
             "원료코드": c,
             "원료명": nm.get(c) or (name_map.get(c, c) if name_map else c),
-            "배합률%": w, "단가_m1": a, "단가_m2": b, "단가변동": b - a,
-            "기여(원/kg)": w / 100.0 * (b - a),
+            "배합률%": r2, "배합률_m1": r1, "배합률_m2": r2, "배합률변동": r2 - r1,
+            "단가_m1": a, "단가_m2": b, "단가변동": b - a,
+            "단가기여": pe, "배합기여": re_, "기여(원/kg)": pe + re_,
         })
     df = pd.DataFrame(rows)
     return df.sort_values("기여(원/kg)", key=lambda s: s.abs(), ascending=False)
@@ -241,58 +282,192 @@ def uc_risk_contribution(product, months=None, bom_x=None, fp=None, name_map=Non
     return df.reset_index(drop=True), sigma
 
 
-def forecast_uc_matrix(bom_x=None, fp=None, products=None):
-    """전 제품 × 전 월 단위원가 행렬 (일괄 출력용, 행렬곱으로 일괄 계산).
-    반환: (uc, cov, miss) — index=표준제품, columns=년월.
+def forecast_uc_matrix(bom_x=None, fp=None, products=None, bom_all=None):
+    """전 제품 × 전 월 단위원가 행렬 (일괄 출력용).
+    배합비는 **그 달에 유효한 버전**을 적용하므로, 배합을 바꾼 달 전후가 서로 다른
+    배합으로 환산된다. 반환: (uc, cov, miss) — index=표준제품, columns=년월.
       uc   = Σ(배합률/100 × 단가)  원/kg
       cov  = 단가가 존재하는 원료의 배합률 합 (%)
       miss = 단가가 없는(0원) BOM 원료 개수. **1 이상이면 그 칸은 과소계산**이며,
              배합률이 작은 고가 원료가 빠지면 cov는 거의 100%라 잡히지 않으므로 miss를 기준으로 볼 것."""
-    if bom_x is None:
-        bom_x = model.explode_bom()
     if fp is None:
         fp = db.load_forecast()
     f = fp.copy()
-    f["년월"] = f["년월"].astype(str); f["원료코드"] = f["원료코드"].astype(str)
+    f["년월"] = f["년월"].astype(str)
+    f["원료코드"] = f["원료코드"].astype(str)
     P = f.pivot_table(index="년월", columns="원료코드", values="단가", aggfunc="max").sort_index()
-    b = bom_x.copy(); b["ERP코드"] = b["ERP코드"].astype(str)
-    if products:
-        b = b[b["표준명칭"].isin(list(products))]
-    B = b.pivot_table(index="표준명칭", columns="ERP코드", values="배합률", aggfunc="sum").fillna(0.0)
-    codes = [c for c in B.columns if c in P.columns]
-    if not codes or B.empty:
-        return pd.DataFrame(), pd.DataFrame()
-    B2 = B[codes]
-    P2 = P[codes].fillna(0.0)
-    uc = pd.DataFrame(B2.values / 100.0 @ P2.values.T, index=B2.index, columns=P2.index)
-    cov = pd.DataFrame(B2.values @ (P2.values > 0).astype(float).T,
-                       index=B2.index, columns=P2.index)
-    miss = pd.DataFrame((B2.values > 0).astype(float) @ (P2.values <= 0).astype(float).T,
-                        index=B2.index, columns=P2.index)
-    return uc, cov, miss
+    if P.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    months = list(P.index)
+    bm = _bom_months(months, bom_x, bom_all)
+
+    groups = {}
+    for m in months:
+        groups.setdefault(id(bm[m]), [bm[m], []])[1].append(m)
+
+    ucs, covs, misses = [], [], []
+    for b, ms in groups.values():
+        b = b.copy()
+        b["ERP코드"] = b["ERP코드"].astype(str)
+        if products:
+            b = b[b["표준명칭"].isin(list(products))]
+        if b.empty:
+            continue
+        B = b.pivot_table(index="표준명칭", columns="ERP코드", values="배합률",
+                          aggfunc="sum").fillna(0.0)
+        codes = [c for c in B.columns if c in P.columns]
+        if not codes:
+            continue
+        B2 = B[codes]
+        P2 = P.loc[ms, codes].fillna(0.0)
+        ucs.append(pd.DataFrame(B2.values / 100.0 @ P2.values.T, index=B2.index, columns=ms))
+        covs.append(pd.DataFrame(B2.values @ (P2.values > 0).astype(float).T,
+                                 index=B2.index, columns=ms))
+        misses.append(pd.DataFrame((B2.values > 0).astype(float) @ (P2.values <= 0).astype(float).T,
+                                   index=B2.index, columns=ms))
+    if not ucs:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    idx = sorted(set().union(*[u.index for u in ucs]))
+    def _join(parts):
+        return (pd.concat([p.reindex(idx) for p in parts], axis=1)
+                .reindex(columns=months).fillna(0.0))
+    return _join(ucs), _join(covs), _join(misses)
 
 
-def forecast_missing_detail(bom_x=None, fp=None):
+def forecast_missing_detail(bom_x=None, fp=None, bom_all=None):
     """단가 결측 칸 상세 — 어떤 원료의 단가가 비어 있어 과소계산되는지."""
-    if bom_x is None:
-        bom_x = model.explode_bom()
     if fp is None:
         fp = db.load_forecast()
-    uc, cov, miss = forecast_uc_matrix(bom_x, fp)
+    uc, cov, miss = forecast_uc_matrix(bom_x, fp, bom_all=bom_all)
     cols = ["표준제품", "년월", "결측 원료수", "결측 원료"]
     if uc.empty:
         return pd.DataFrame(columns=cols)
     f = fp.copy()
-    f["년월"] = f["년월"].astype(str); f["원료코드"] = f["원료코드"].astype(str)
+    f["년월"] = f["년월"].astype(str)
+    f["원료코드"] = f["원료코드"].astype(str)
     P = f.pivot_table(index="년월", columns="원료코드", values="단가", aggfunc="max")
     nm = dict(zip(f["원료코드"], f["원료명"]))
-    b = bom_x.copy(); b["ERP코드"] = b["ERP코드"].astype(str)
-    wmap = {p: dict(zip(g["ERP코드"], g["배합률"])) for p, g in b.groupby("표준명칭")}
+    bm = _bom_months(list(uc.columns), bom_x, bom_all)
+    wcache = {}
     rows = []
     for (prod, ym), n in miss[miss > 0].stack().items():
-        w = wmap.get(prod, {})
+        key = id(bm[ym])
+        if key not in wcache:
+            b = bm[ym].copy()
+            b["ERP코드"] = b["ERP코드"].astype(str)
+            wcache[key] = {p: dict(zip(g["ERP코드"], g["배합률"])) for p, g in b.groupby("표준명칭")}
+        w = wcache[key].get(prod, {})
         bad = [c for c in w if c in P.columns and not (P.loc[ym, c] > 0)]
         bad.sort(key=lambda x: -w[x])
         rows.append({"표준제품": prod, "년월": ym, "결측 원료수": int(n),
                      "결측 원료": ", ".join(f"{nm.get(c, c)} ({w[c]:.2f}%)" for c in bad)})
     return pd.DataFrame(rows, columns=cols).sort_values(["표준제품", "년월"])
+
+
+# ---------- 제품 생산구성 + 배합비 변경 3요인 분해 (이론, 원/kg) ----------
+def product_decomp_recipe(plan, m1, m2, bom_ml=None, name_map=None):
+    """⭐ 이론 사용단가(원/kg) Δ를 원료단가·배합(레시피)·제품믹스 3요인으로 정확 분해.
+
+    사용단가 P = Σ_p w_p·c_p   (w=생산비중, c=제품 단위원가)
+    c_p = Σ_c 배합률_pc/100 × 단가_c  →  Δc_p = Σ_c[ r₂·Δp + Δr·p₁ ]/100
+    이므로
+        ΔP = Σ w₂·Δc   +   Σ(w₂−w₁)(c₁−P₁)
+           = 원료단가효과 + 배합효과 + 제품믹스효과     (합이 ΔP와 정확히 일치)
+
+    배합비를 바꿔 원가를 낮춘 몫이 ‘물량/단가’에 섞이지 않고 따로 잡힌다.
+    반환: (총괄 dict, 제품별 df, 배합효과 원료상세 df)
+    """
+    if bom_ml is None:
+        bom_ml = model.bom_long([m1, m2])
+    b = bom_ml.copy()
+    b["년월"] = b["년월"].astype(str)
+    b["ERP코드"] = b["ERP코드"].astype(str)
+
+    pr = db.load_price().copy()
+    pr["년월"] = pr["년월"].astype(str)
+    pr["원료코드"] = pr["원료코드"].astype(str)
+    pm = {m: dict(zip(pr[pr["년월"] == m]["원료코드"], pr[pr["년월"] == m]["단가"]))
+          for m in (m1, m2)}
+
+    pl = plan.copy(); pl["년월"] = pl["년월"].astype(str)
+    w1 = pl[pl["년월"] == m1].groupby("표준제품")["계획중량"].sum()
+    w2 = pl[pl["년월"] == m2].groupby("표준제품")["계획중량"].sum()
+    W1, W2 = float(w1.sum()), float(w2.sum())
+
+    r1 = b[b["년월"] == m1].set_index(["표준명칭", "ERP코드"])["배합률"]
+    r2 = b[b["년월"] == m2].set_index(["표준명칭", "ERP코드"])["배합률"]
+    idx = r1.index.union(r2.index)
+    d = pd.DataFrame({"r1": r1.reindex(idx).fillna(0.0),
+                      "r2": r2.reindex(idx).fillna(0.0)}).reset_index()
+    d["p1"] = d["ERP코드"].map(pm[m1]).fillna(0.0)
+    d["p2"] = d["ERP코드"].map(pm[m2]).fillna(0.0)
+    d["c1"] = d["r1"] / 100.0 * d["p1"]
+    d["c2"] = d["r2"] / 100.0 * d["p2"]
+    d["단가분"] = d["r2"] / 100.0 * (d["p2"] - d["p1"])   # 원료단가 변동분
+    d["배합분"] = (d["r2"] - d["r1"]) / 100.0 * d["p1"]   # 레시피 변동분
+
+    g = d.groupby("표준명칭").agg(단위원가_m1=("c1", "sum"), 단위원가_m2=("c2", "sum"),
+                                단가분=("단가분", "sum"), 배합분=("배합분", "sum"))
+    prods = sorted(set(g.index) | set(w1.index) | set(w2.index))
+    g = g.reindex(prods).fillna(0.0)
+    sh1 = (w1.reindex(prods).fillna(0.0) / W1) if W1 else pd.Series(0.0, index=prods)
+    sh2 = (w2.reindex(prods).fillna(0.0) / W2) if W2 else pd.Series(0.0, index=prods)
+    P1 = float((sh1 * g["단위원가_m1"]).sum())
+    P2 = float((sh2 * g["단위원가_m2"]).sum())
+
+    out = pd.DataFrame({
+        "표준제품": prods,
+        "생산kg_m1": w1.reindex(prods).fillna(0.0).values,
+        "생산kg_m2": w2.reindex(prods).fillna(0.0).values,
+        "비중_m1": sh1.values, "비중_m2": sh2.values,
+        "단위원가_m1": g["단위원가_m1"].values, "단위원가_m2": g["단위원가_m2"].values,
+        "원료단가효과": (sh2 * g["단가분"]).values,
+        "배합효과": (sh2 * g["배합분"]).values,
+        "믹스효과": ((sh2 - sh1) * (g["단위원가_m1"] - P1)).values,
+    })
+    out["단위원가증감"] = out["단위원가_m2"] - out["단위원가_m1"]
+
+    det = d[(d["r2"] - d["r1"]).abs() > 1e-9].copy()
+    if len(det):
+        det["비중_m2"] = det["표준명칭"].map(sh2).fillna(0.0)
+        det["배합효과"] = det["비중_m2"] * det["배합분"]
+        det = det.rename(columns={"r1": "배합률_m1", "r2": "배합률_m2", "p1": "전월단가"})
+        det["배합률변동"] = det["배합률_m2"] - det["배합률_m1"]
+        if name_map:
+            det["원료명"] = det["ERP코드"].map(name_map)
+        det = det[["표준명칭", "ERP코드"] + (["원료명"] if name_map else []) +
+                  ["배합률_m1", "배합률_m2", "배합률변동", "전월단가", "배합효과"]]
+        det = det.sort_values("배합효과", key=lambda x: x.abs(), ascending=False)
+    else:
+        det = pd.DataFrame(columns=["표준명칭", "ERP코드", "배합률_m1", "배합률_m2",
+                                    "배합률변동", "전월단가", "배합효과"])
+
+    summ = {"사용단가_m1": P1, "사용단가_m2": P2, "증감": P2 - P1,
+            "원료단가효과": float(out["원료단가효과"].sum()),
+            "배합효과": float(out["배합효과"].sum()),
+            "믹스효과": float(out["믹스효과"].sum()),
+            "배합변경제품수": int(det["표준명칭"].nunique()) if len(det) else 0}
+    summ["잔차"] = summ["증감"] - (summ["원료단가효과"] + summ["배합효과"] + summ["믹스효과"])
+    return summ, out, det.reset_index(drop=True)
+
+
+def bom_diff(m1, m2, bom_ml=None, name_map=None):
+    """두 달 사이 배합비 변경 목록(제품×원료). 금액 영향 없이 순수 변경 내역."""
+    if bom_ml is None:
+        bom_ml = model.bom_long([m1, m2])
+    b = bom_ml.copy()
+    b["년월"] = b["년월"].astype(str); b["ERP코드"] = b["ERP코드"].astype(str)
+    r1 = b[b["년월"] == m1].set_index(["표준명칭", "ERP코드"])["배합률"]
+    r2 = b[b["년월"] == m2].set_index(["표준명칭", "ERP코드"])["배합률"]
+    idx = r1.index.union(r2.index)
+    d = pd.DataFrame({f"배합률_{m1}": r1.reindex(idx).fillna(0.0),
+                      f"배합률_{m2}": r2.reindex(idx).fillna(0.0)}).reset_index()
+    d["변동"] = d[f"배합률_{m2}"] - d[f"배합률_{m1}"]
+    d = d[d["변동"].abs() > 1e-9]
+    d["구분"] = ["신규 투입" if a == 0 else ("제외" if b_ == 0 else "비율 변경")
+                for a, b_ in zip(d[f"배합률_{m1}"], d[f"배합률_{m2}"])]
+    if name_map:
+        d["원료명"] = d["ERP코드"].map(name_map)
+    return d.sort_values(["표준명칭", "변동"], key=lambda s: s.abs() if s.name == "변동" else s,
+                         ascending=[True, False]).reset_index(drop=True)

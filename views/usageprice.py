@@ -89,22 +89,76 @@ with b:
 
 st.divider()
 
-# ================= 3) 제품 생산구성 뒷받침 (이론) =================
-st.header("3. ⭐ 왜? — 제품 생산구성 (BOM×계획중량 뒷받침)")
-sp, prod = up.product_decomp(cost, D["plan"], m1, m2)
-st.info(f"제품 생산구성 관점(이론)으로 보면 사용단가 {sp['사용단가_m1']:,.0f}→{sp['사용단가_m2']:,.0f}원/kg, "
-        f"**믹스효과 {sgn(sp['믹스효과'])}** · 단가효과 {sgn(sp['단가효과'])}. "
-        "실적과 방향은 같고, 수준차는 수율입니다. "
-        "아래는 ‘어떤 제품을 더/덜 만들어’ 사용단가를 움직였는지입니다.")
-a, b = st.columns(2)
+# ================= 3) 제품 생산구성 + 배합비 뒷받침 (이론) =================
+st.header("3. ⭐ 왜? — 제품 생산구성·배합비 (BOM×계획중량 뒷받침)")
+sp, prod, rdet = up.product_decomp_recipe(D["plan"], m1, m2, D["bom_ml"], nm)
+n_rec = sp["배합변경제품수"]
+
+st.info(f"제품 관점(이론)으로 보면 사용단가 {sp['사용단가_m1']:,.0f}→{sp['사용단가_m2']:,.0f}원/kg "
+        f"({sgn(sp['증감'])}). "
+        f"**원료단가 {sgn(sp['원료단가효과'])} · 배합 {sgn(sp['배합효과'])} · 믹스 {sgn(sp['믹스효과'])}** "
+        "— 세 항의 합이 증감과 정확히 일치합니다. "
+        "실적과 방향은 같고, 수준차는 수율입니다.")
+
+w1, w2 = st.columns([2, 3])
+with w1:
+    steps = [("원료단가", sp["원료단가효과"]), ("배합", sp["배합효과"]), ("제품믹스", sp["믹스효과"])]
+    fig = go.Figure(go.Waterfall(
+        orientation="v", measure=["absolute"] + ["relative"] * len(steps) + ["total"],
+        x=[m1] + [s[0] for s in steps] + [m2],
+        y=[sp["사용단가_m1"]] + [s[1] for s in steps] + [sp["사용단가_m2"]],
+        text=[f"{sp['사용단가_m1']:,.0f}"] + [sgn(s[1], "") for s in steps] + [f"{sp['사용단가_m2']:,.0f}"],
+        textposition="outside", connector={"line": {"color": theme.LIGHT}},
+        decreasing={"marker": {"color": theme.DOWN}}, increasing={"marker": {"color": theme.UP}},
+        totals={"marker": {"color": theme.NEUTRAL}}))
+    fig.update_layout(height=360, margin=dict(t=30, b=10), showlegend=False,
+                      xaxis=dict(type="category"), yaxis_title="원/kg")
+    st.plotly_chart(fig, width='stretch')
+with w2:
+    st.markdown("""
+| 항목 | 뜻 | 읽는 법 |
+|---|---|---|
+| **원료단가** | 배합은 그대로인데 **원료 값이 변했다** | 구매·시황 요인 |
+| **배합** | 값은 그대로인데 **레시피를 바꿨다** | 우리가 의도한 원가 조정 |
+| **제품믹스** | 배합·단가는 그대로인데 **생산 구성이 바뀌었다** | 비싼 제품을 더 만들면 + |
+""")
+    if n_rec:
+        st.success(f"이 구간에 **{n_rec}개 제품의 배합비가 변경**되었습니다 "
+                   f"(배합효과 {sgn(sp['배합효과'])}). 예전에는 이 몫이 ‘물량’에 섞여 보였습니다.")
+    else:
+        st.caption(f"{m1} → {m2} 구간에 배합비 변경이 없어 **배합효과는 0**입니다. "
+                   "배합을 바꾸면 그 몫이 여기로 분리됩니다. "
+                   "(변경 등록: 데이터 관리 → ⑥ 배합비(BOM) 버전)")
+
+a, b, cc = st.columns(3)
 with a:
-    st.subheader("믹스효과 — 생산구성 변화(제품)")
-    hbar(prod, "믹스효과", "표준제품")
-    st.caption("+ = 상대적으로 비싼 제품(예: GF) 비중↑로 사용단가를 끌어올림. − = 저가 제품 비중↑.")
+    st.subheader("원료단가효과 (제품별)")
+    hbar(prod, "원료단가효과", "표준제품", n=10)
+    st.caption("그 제품의 배합 원료 단가가 올라 사용단가에 기여한 몫.")
 with b:
-    st.subheader("단가효과 — 제품 원가 변화")
-    hbar(prod, "단가효과", "표준제품")
-    st.caption("그 제품 1kg 원가(=배합원료 단가)가 올라 사용단가에 기여한 몫.")
+    st.subheader("배합효과 (제품별)")
+    if n_rec:
+        hbar(prod[prod["배합효과"].abs() > 1e-9], "배합효과", "표준제품", n=10)
+        st.caption("− = 레시피를 바꿔 원가를 낮춘 몫. + = 배합 강화로 원가가 올라간 몫.")
+    else:
+        st.caption("배합비 변경 없음.")
+with cc:
+    st.subheader("믹스효과 (제품별)")
+    hbar(prod, "믹스효과", "표준제품", n=10)
+    st.caption("+ = 상대적으로 비싼 제품(예: GF) 비중↑. − = 저가 제품 비중↑.")
+
+if n_rec:
+    with st.expander(f"🧪 배합비 변경 상세 — {n_rec}개 제품 · {len(rdet)}개 원료"):
+        rs = rdet.copy()
+        rs["배합률"] = rs.apply(lambda r: f"{r['배합률_m1']:.4f}% → {r['배합률_m2']:.4f}%", axis=1)
+        rs["변동"] = rs["배합률변동"].map(lambda v: f"{v:+.4f}%p")
+        rs["전월단가"] = rs["전월단가"].map(lambda v: f"{v:,.0f}원/kg")
+        rs["사용단가 영향"] = rs["배합효과"].map(lambda v: sgn(v))
+        cols = ["표준명칭"] + (["원료명"] if "원료명" in rs.columns else ["ERP코드"]) + \
+               ["배합률", "변동", "전월단가", "사용단가 영향"]
+        st.dataframe(rs[cols], width='stretch', hide_index=True, height=320)
+        st.caption("영향 = 그 원료의 배합률 변동 × 전월단가 × 해당 제품 생산비중. "
+                   "**전월 단가로 평가**하므로 단가 변동분과 겹치지 않습니다.")
 
 st.divider()
 

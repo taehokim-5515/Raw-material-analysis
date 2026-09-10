@@ -25,19 +25,58 @@ def explode_bom(bom=None):
     return pd.DataFrame(rows, columns=["표준명칭", "ERP코드", "배합률"])
 
 
+def explode_bom_at(ym, bom_all=None):
+    """ym 시점에 유효한 배합비를 전개. 키블 반제품도 그 달 버전으로 전개된다."""
+    if bom_all is None:
+        bom_all = db.load_bom_all()
+    return explode_bom(db.pick_bom_version(bom_all, ym))
+
+
+def bom_long(months, bom_all=None):
+    """월별 전개 배합비(롱포맷) [년월, 표준명칭, ERP코드, 배합률].
+    버전이 안 바뀐 달끼리는 계산을 재사용한다."""
+    if bom_all is None:
+        bom_all = db.load_bom_all()
+    cache, out = {}, []
+    for ym in sorted({str(m) for m in months}):
+        d = db.pick_bom_version(bom_all, ym)
+        sig = tuple(sorted(set(zip(d["표준명칭"], d["적용시작"]))))
+        if sig not in cache:
+            cache[sig] = explode_bom(d)
+        e = cache[sig].copy()
+        e.insert(0, "년월", ym)
+        out.append(e)
+    cols = ["년월", "표준명칭", "ERP코드", "배합률"]
+    return pd.concat(out, ignore_index=True) if out else pd.DataFrame(columns=cols)
+
+
 def bom_material_codes(bom=None):
-    """BOM(60제품, 키블 전개 후)이 사용하는 원료코드 집합."""
-    return set(explode_bom(bom)["ERP코드"].astype(str))
+    """BOM(키블 전개 후)이 사용하는 원료코드 집합. **전 버전 합집합**."""
+    if bom is not None:
+        return set(explode_bom(bom)["ERP코드"].astype(str))
+    bom_all = db.load_bom_all()
+    codes = set()
+    for eff in sorted(bom_all["적용시작"].astype(str).unique()):
+        codes |= set(explode_bom_at(eff, bom_all)["ERP코드"].astype(str))
+    return codes
 
 
 def theoretical_usage(plan=None, bom_x=None):
     """이론 사용량(kg) = 계획중량 × 배합률/100.
-    반환: DataFrame[년월, 표준제품, ERP코드, 이론사용kg]"""
+    bom_x에 `년월` 컬럼이 있으면 **그 달에 유효한 배합비**로 월별 매칭한다.
+    생략 시 월별 버전을 자동 구성. 반환: [년월, 표준제품, ERP코드, 이론사용kg]"""
     if plan is None:
         plan = db.load_plan()
+    plan = plan.copy()
+    plan["년월"] = plan["년월"].astype(str)
     if bom_x is None:
-        bom_x = explode_bom()
-    m = plan.merge(bom_x, left_on="표준제품", right_on="표준명칭", how="left")
+        bom_x = bom_long(plan["년월"].unique())
+    if "년월" in bom_x.columns:
+        b = bom_x.copy()
+        b["년월"] = b["년월"].astype(str)
+        m = plan.merge(b, left_on=["년월", "표준제품"], right_on=["년월", "표준명칭"], how="left")
+    else:
+        m = plan.merge(bom_x, left_on="표준제품", right_on="표준명칭", how="left")
     m["이론사용kg"] = m["계획중량"] * m["배합률"] / 100.0
     return m[["년월", "표준제품", "ERP코드", "이론사용kg"]]
 

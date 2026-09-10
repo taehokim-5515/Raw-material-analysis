@@ -207,10 +207,63 @@ def parse_forecast_multi(file):
     return months, {"월별": per, "무효행": bad}
 
 
+def parse_bom(file):
+    """배합비(BOM) 파일 → (DataFrame[표준명칭, ERP코드, 원료한글명, 배합률], report).
+    한 파일에 여러 제품이 섞여 있어도 되고, 들어 있는 제품만 새 버전이 된다."""
+    df = pd.read_excel(file, dtype=str)
+    df.columns = [str(c).strip() for c in df.columns]
+
+    def pick(cands, exclude=()):
+        for c in df.columns:
+            if any(k in c for k in exclude):
+                continue
+            if any(k in c for k in cands):
+                return c
+        return None
+
+    cprod = pick(["표준명칭", "표준제품", "제품명", "품목명", "제품"])
+    ccode = pick(["ERP코드", "원료코드", "코드"])
+    cname = pick(["원료한글명", "원료명", "한글명"], exclude=("제품", "품목"))
+    cratio = pick(["배합률", "배합비", "비율", "함량"])
+    miss = [n for n, c in [("표준명칭", cprod), ("ERP코드", ccode), ("배합률", cratio)]
+            if c is None]
+    if miss:
+        raise ValueError(f"필수 컬럼을 찾지 못했습니다: {', '.join(miss)} "
+                         f"(발견된 컬럼: {', '.join(df.columns)})")
+
+    work = pd.DataFrame({
+        "표준명칭": df[cprod].astype(str).str.strip(),
+        "ERP코드": df[ccode].astype(str).str.replace(r"\.0$", "", regex=True).str.strip(),
+        "원료한글명": (df[cname].astype(str).str.strip() if cname else ""),
+        "배합률": pd.to_numeric(
+            df[cratio].astype(str).str.replace(",", "", regex=False), errors="coerce"),
+    })
+    bad = int(work["배합률"].isna().sum()
+              + work["표준명칭"].isin(["", "nan", "None"]).sum()
+              + work["ERP코드"].isin(["", "nan", "None"]).sum())
+    work = work.dropna(subset=["배합률"])
+    work = work[~work["표준명칭"].isin(["", "nan", "None"])]
+    work = work[~work["ERP코드"].isin(["", "nan", "None"])]
+    work = work[work["배합률"] != 0]
+    # 같은 제품·코드가 여러 줄이면 합산
+    work = (work.groupby(["표준명칭", "ERP코드"], as_index=False)
+            .agg(원료한글명=("원료한글명", "first"), 배합률=("배합률", "sum")))
+
+    sums = work.groupby("표준명칭")["배합률"].sum()
+    off = [(p, round(float(v), 2)) for p, v in sums.items()
+           if not (100 - C.BOM_SUM_TOL <= v <= 100 + C.BOM_SUM_TOL)]
+    known = set(db.load_bom_all()["표준명칭"].astype(str).unique())
+    report = {"행수": len(work), "제품수": int(work["표준명칭"].nunique()),
+              "무효행": bad, "합계이상": off,
+              "신규제품": sorted(set(work["표준명칭"]) - known),
+              "제품별": sums.round(2).to_dict()}
+    return work[["표준명칭", "ERP코드", "원료한글명", "배합률"]], report
+
+
 def validate_month(ym, plan_rows):
     """월 마감 검증 게이트. 통과 여부 + 이슈 리스트."""
     issues = []
-    bom = db.load_bom()
+    bom = db.load_bom(ym)          # 그 달에 유효한 배합비 버전
     bomprods = set(bom["표준명칭"].unique())
     # 1) 생산제품 BOM 보유
     nobom = sorted(set(plan_rows["표준제품"]) - bomprods)

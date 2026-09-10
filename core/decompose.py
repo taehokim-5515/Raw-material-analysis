@@ -197,3 +197,83 @@ def yield_gap(cost, m1, m2):
     r["사용량gap%"] = (r["이론사용kg"] / r["실적사용kg"] - 1) * 100
     r["금액gap%"] = (r["이론금액"] / r["실적금액"] - 1) * 100
     return r
+
+
+def recipe_cost_split(plan, m1, m2, bom_ml=None, name_map=None):
+    """⭐ 이론 원료비 증감의 4요인 정확 분해 — 배합비 변경분을 분리한다.
+
+    q = 계획중량 W × 배합률 r/100 이므로
+        Δq = ΔW × r₁/100  +  W₂ × Δr/100
+             └ 생산량 변화 ┘   └ 레시피 변화 ┘
+    따라서
+        Δ금액 = 단가효과(Δp×q₂) + 총생산량효과 + 제품믹스효과 + 배합효과
+    네 항의 합은 Δ이론금액과 **정확히** 일치한다(교호항 없음).
+
+    반환: (제품별 df, 배합효과 상세 df, 총괄 dict)
+    """
+    if bom_ml is None:
+        bom_ml = model.bom_long([m1, m2])
+    b = bom_ml.copy()
+    b["년월"] = b["년월"].astype(str)
+    b["ERP코드"] = b["ERP코드"].astype(str)
+    r1 = b[b["년월"] == m1].set_index(["표준명칭", "ERP코드"])["배합률"]
+    r2 = b[b["년월"] == m2].set_index(["표준명칭", "ERP코드"])["배합률"]
+
+    plan = plan.copy(); plan["년월"] = plan["년월"].astype(str)
+    w1 = plan[plan["년월"] == m1].groupby("표준제품")["계획중량"].sum()
+    w2 = plan[plan["년월"] == m2].groupby("표준제품")["계획중량"].sum()
+    W1, W2 = float(w1.sum()), float(w2.sum())
+    s = W2 / W1 if W1 else 1.0
+
+    price = db.load_price().copy(); price["년월"] = price["년월"].astype(str)
+    p1map = dict(zip(price[price["년월"] == m1]["원료코드"].astype(str),
+                     price[price["년월"] == m1]["단가"]))
+
+    # 제품 1kg 전월원가 u1 = Σ(전월배합률/100 × 전월단가)
+    u1 = (r1.reset_index()
+          .assign(u=lambda d: d["배합률"] / 100.0 * d["ERP코드"].map(p1map).fillna(0.0))
+          .groupby("표준명칭")["u"].sum())
+
+    # 배합효과 상세: W₂ × Δr/100 × 전월단가
+    idx = r1.index.union(r2.index)
+    d1 = r1.reindex(idx).fillna(0.0)
+    d2 = r2.reindex(idx).fillna(0.0)
+    det = pd.DataFrame({"배합률_m1": d1, "배합률_m2": d2}).reset_index()
+    det["배합률변동"] = det["배합률_m2"] - det["배합률_m1"]
+    det = det[det["배합률변동"].abs() > 1e-9]
+    det["생산kg_m2"] = det["표준명칭"].map(w2).fillna(0.0)
+    det["전월단가"] = det["ERP코드"].map(p1map).fillna(0.0)
+    det["배합효과"] = det["생산kg_m2"] * det["배합률변동"] / 100.0 * det["전월단가"]
+    if name_map:
+        det["원료명"] = det["ERP코드"].map(name_map)
+    rec = det.groupby("표준명칭")["배합효과"].sum() if len(det) else pd.Series(dtype=float)
+
+    prods = sorted(set(w1.index) | set(w2.index) | set(u1.index) | set(rec.index))
+    rows = []
+    for p in prods:
+        u = float(u1.get(p, 0.0))
+        a, bb = float(w1.get(p, 0.0)), float(w2.get(p, 0.0))
+        rows.append((p, a * u * (s - 1), (bb - a * s) * u, float(rec.get(p, 0.0))))
+    df = pd.DataFrame(rows, columns=["표준제품", "총생산량효과", "믹스효과", "배합효과"])
+    df["물량효과계"] = df["총생산량효과"] + df["믹스효과"] + df["배합효과"]
+
+    summ = {"총생산량효과": float(df["총생산량효과"].sum()),
+            "믹스효과": float(df["믹스효과"].sum()),
+            "배합효과": float(df["배합효과"].sum()),
+            "생산kg_m1": W1, "생산kg_m2": W2, "성장률": s - 1,
+            "배합변경제품수": int(det["표준명칭"].nunique()) if len(det) else 0}
+    det = det.sort_values("배합효과", key=lambda x: x.abs(), ascending=False)
+    return df, det.reset_index(drop=True), summ
+
+
+def cost_bridge_4(plan, cost, m1, m2, bom_ml=None, name_map=None):
+    """총 이론 원료비 워터폴 4항 — 단가·총생산량·제품믹스·배합. 합 = Δ이론금액."""
+    mb = material_bridge(cost, m1, m2)
+    df, det, summ = recipe_cost_split(plan, m1, m2, bom_ml, name_map)
+    out = {"총_m1": float(mb["금액_m1"].sum()), "총_m2": float(mb["금액_m2"].sum()),
+           "단가효과": float(mb["단가효과"].sum())}
+    out.update(summ)
+    out["증감"] = out["총_m2"] - out["총_m1"]
+    out["잔차"] = out["증감"] - (out["단가효과"] + out["총생산량효과"]
+                              + out["믹스효과"] + out["배합효과"])
+    return out, df, det
