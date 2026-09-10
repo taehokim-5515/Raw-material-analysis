@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """변동 분해: 단가/물량/믹스, 원료 사용량의 제품 귀속, BOM 대비 실적 수율."""
 import pandas as pd
-from . import db, model
+from . import db, model, config as C
 
 
 def _pivot_two_months(df, key, val, m1, m2):
@@ -240,13 +240,14 @@ def recipe_cost_split(plan, m1, m2, bom_ml=None, name_map=None):
     d2 = r2.reindex(idx).fillna(0.0)
     det = pd.DataFrame({"배합률_m1": d1, "배합률_m2": d2}).reset_index()
     det["배합률변동"] = det["배합률_m2"] - det["배합률_m1"]
-    det = det[det["배합률변동"].abs() > 1e-9]
     det["생산kg_m2"] = det["표준명칭"].map(w2).fillna(0.0)
     det["전월단가"] = det["ERP코드"].map(p1map).fillna(0.0)
     det["배합효과"] = det["생산kg_m2"] * det["배합률변동"] / 100.0 * det["전월단가"]
     if name_map:
         det["원료명"] = det["ERP코드"].map(name_map)
+    # 합계는 **전 행** 기준(분해 정확성 유지), 목록만 반올림 오차를 걸러 보여준다
     rec = det.groupby("표준명칭")["배합효과"].sum() if len(det) else pd.Series(dtype=float)
+    det = det[det["배합률변동"].abs() > C.BOM_DIFF_TOL]
 
     prods = sorted(set(w1.index) | set(w2.index) | set(u1.index) | set(rec.index))
     rows = []

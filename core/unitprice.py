@@ -4,7 +4,7 @@
 Δ사용단가 = 단가효과 + 믹스효과 + 교호 (3요인 분해)."""
 import numpy as np
 import pandas as pd
-from . import db, model, dims
+from . import db, model, dims, config as C
 
 
 # ---------- 추이(월별 사용단가) ----------
@@ -428,7 +428,7 @@ def product_decomp_recipe(plan, m1, m2, bom_ml=None, name_map=None):
     })
     out["단위원가증감"] = out["단위원가_m2"] - out["단위원가_m1"]
 
-    det = d[(d["r2"] - d["r1"]).abs() > 1e-9].copy()
+    det = d[(d["r2"] - d["r1"]).abs() > C.BOM_DIFF_TOL].copy()
     if len(det):
         det["비중_m2"] = det["표준명칭"].map(sh2).fillna(0.0)
         det["배합효과"] = det["비중_m2"] * det["배합분"]
@@ -464,7 +464,7 @@ def bom_diff(m1, m2, bom_ml=None, name_map=None):
     d = pd.DataFrame({f"배합률_{m1}": r1.reindex(idx).fillna(0.0),
                       f"배합률_{m2}": r2.reindex(idx).fillna(0.0)}).reset_index()
     d["변동"] = d[f"배합률_{m2}"] - d[f"배합률_{m1}"]
-    d = d[d["변동"].abs() > 1e-9]
+    d = d[d["변동"].abs() > C.BOM_DIFF_TOL]
     d["구분"] = ["신규 투입" if a == 0 else ("제외" if b_ == 0 else "비율 변경")
                 for a, b_ in zip(d[f"배합률_{m1}"], d[f"배합률_{m2}"])]
     if name_map:

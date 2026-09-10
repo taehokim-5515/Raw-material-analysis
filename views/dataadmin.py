@@ -270,6 +270,9 @@ with tab_bom:
         k[1].metric("원료행", f"{brep['행수']:,}행")
         k[2].metric("무효 행", brep["무효행"])
         k[3].metric("합계 100% 아님", f"{len(brep['합계이상'])}종")
+        st.caption("인식한 컬럼 — "
+                   + " · ".join(f"{a}: `{b}`" for a, b in brep["사용컬럼"].items() if b)
+                   + f"  (시트 `{brep['시트']}`). 값이 엉뚱하면 컬럼명을 바꿔 다시 올리세요.")
         if brep["합계이상"]:
             st.error("배합률 합계가 100±0.5%를 벗어난 제품 — 확인 후 다시 올리세요. (저장 차단)")
             st.dataframe(pd.DataFrame(brep["합계이상"], columns=["표준명칭", "배합합%"]),
@@ -312,7 +315,8 @@ with tab_bom:
                .join(prev.set_index(["표준명칭", "ERP코드"])["배합률"].rename("기존"),
                      how="outer").fillna(0.0).reset_index())
         cmp["변동"] = cmp["신규"] - cmp["기존"]
-        chg = cmp[cmp["변동"].abs() > 1e-9].copy()
+        chg = cmp[cmp["변동"].abs() > C.BOM_DIFF_TOL].copy()
+        _dust = int((cmp["변동"].abs() > 1e-9).sum()) - len(chg)
 
         st.markdown(f"**변경 미리보기 — {eff} 시점 현재 배합 대비**")
         if len(chg) == 0:
@@ -329,9 +333,10 @@ with tab_bom:
             show["변동"] = show["변동"].map(lambda v: f"{v:+.4f}")
             st.dataframe(show[["표준명칭", "ERP코드", "원료명", "구분", "기존", "신규", "변동"]],
                          width='stretch', hide_index=True, height=280)
-            st.caption(f"{chg['표준명칭'].nunique()}개 제품 · {len(chg)}개 원료 변경. "
-                       "저장하면 이 달부터의 이론 원료비·단위원가가 새 배합으로 다시 계산되고, "
-                       "‘사용단가 분석’ 페이지에 **배합효과**로 분리되어 나타납니다.")
+            st.caption(f"{chg['표준명칭'].nunique()}개 제품 · {len(chg)}개 원료 변경"
+                       + (f" (±{C.BOM_DIFF_TOL}%p 미만 반올림 오차 {_dust}건은 제외). " if _dust else ". ")
+                       + "저장하면 이 달부터의 이론 원료비·단위원가가 새 배합으로 다시 계산되고, "
+                         "‘사용단가 분석’ 페이지에 **배합효과**로 분리되어 나타납니다.")
 
         _label = (f"{eff} ~ {endm} 한정 적용 — 버전 저장" if revert
                   else f"{eff}부터 적용 — 배합비 버전 저장")

@@ -210,21 +210,30 @@ def parse_forecast_multi(file):
 def parse_bom(file):
     """배합비(BOM) 파일 → (DataFrame[표준명칭, ERP코드, 원료한글명, 배합률], report).
     한 파일에 여러 제품이 섞여 있어도 되고, 들어 있는 제품만 새 버전이 된다."""
-    df = pd.read_excel(file, dtype=str)
+    try:
+        sheets = pd.ExcelFile(file).sheet_names
+    except Exception:
+        sheets = []
+    sheet = "BOM" if "BOM" in sheets else 0
+    df = pd.read_excel(file, sheet_name=sheet, dtype=str)
     df.columns = [str(c).strip() for c in df.columns]
 
     def pick(cands, exclude=()):
-        for c in df.columns:
-            if any(k in c for k in exclude):
-                continue
-            if any(k in c for k in cands):
-                return c
+        """후보를 **우선순위 순서대로** 훑는다.
+        (컬럼 순서로 훑으면 '배합비레벨' 같은 유사 컬럼이 '배합률'보다 먼저 걸린다.)"""
+        for k in cands:
+            for c in df.columns:
+                if any(e in c for e in exclude):
+                    continue
+                if k in c:
+                    return c
         return None
 
-    cprod = pick(["표준명칭", "표준제품", "제품명", "품목명", "제품"])
-    ccode = pick(["ERP코드", "원료코드", "코드"])
-    cname = pick(["원료한글명", "원료명", "한글명"], exclude=("제품", "품목"))
-    cratio = pick(["배합률", "배합비", "비율", "함량"])
+    cprod = pick(["표준명칭", "표준제품", "제품명", "품목명", "제품"], exclude=("코드",))
+    ccode = pick(["ERP코드", "원료코드", "품목코드", "코드"])
+    cname = pick(["원료한글명", "원료명", "한글명"], exclude=("제품", "품목", "코드"))
+    cratio = pick(["배합률", "배합비율", "배합비", "비율", "함량"],
+                  exclude=("레벨", "코드", "명"))
     miss = [n for n, c in [("표준명칭", cprod), ("ERP코드", ccode), ("배합률", cratio)]
             if c is None]
     if miss:
@@ -256,7 +265,15 @@ def parse_bom(file):
     report = {"행수": len(work), "제품수": int(work["표준명칭"].nunique()),
               "무효행": bad, "합계이상": off,
               "신규제품": sorted(set(work["표준명칭"]) - known),
-              "제품별": sums.round(2).to_dict()}
+              "제품별": sums.round(2).to_dict(),
+              "사용컬럼": {"표준명칭": cprod, "ERP코드": ccode,
+                        "원료한글명": cname, "배합률": cratio},
+              "시트": sheet if isinstance(sheet, str) else (sheets[0] if sheets else "(첫 시트)")}
+    if len(work) == 0:
+        raise ValueError(
+            "유효한 행이 하나도 없습니다. 인식한 컬럼을 확인하세요 — "
+            f"표준명칭='{cprod}', ERP코드='{ccode}', 배합률='{cratio}'. "
+            f"(시트 '{report['시트']}', 원본 {len(df)}행)")
     return work[["표준명칭", "ERP코드", "원료한글명", "배합률"]], report
 
 
