@@ -47,6 +47,7 @@ P = {
     "watch": st.Page("views/watch.py", title="단가 감시", icon="🚨"),
     "usageprice": st.Page("views/usageprice.py", title="사용단가 분석", icon="⚖️"),
     "forecast": st.Page("views/forecast.py", title="단위원가 전망", icon="📈"),
+    "simulate": st.Page("views/simulate.py", title="단가 시뮬레이션", icon=":material/calculate:"),
     "detail": st.Page("views/detail.py", title="원료 상세 (실적)", icon="📋"),
     "report": st.Page("views/report_page.py", title="통합 리포트 (메일)", icon="📧"),
     "data": st.Page("views/dataadmin.py", title="데이터 관리", icon="🗂️"),
@@ -57,7 +58,7 @@ if st.session_state.role == "material":
     pages = [P["monthly"], P["material"]]
 else:  # full
     pages = [P["monthly"], P["product"], P["material"], P["watch"],
-             P["usageprice"], P["forecast"], P["detail"], P["report"], P["data"]]
+             P["usageprice"], P["forecast"], P["simulate"], P["detail"], P["report"], P["data"]]
 
 with st.sidebar:
     if st.button("🔓 로그아웃", use_container_width=True):
